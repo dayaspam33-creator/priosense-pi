@@ -47,13 +47,14 @@ APP_NAME      = "TetraMonitor"
 #   Uplink   (portofoons/voertuigen zenden zelf): 390–395 MHz  ← standaard
 #   Downlink (basisstations zenden):              380–385 MHz
 # Met een magneetantenne dichtbij pik je vooral de UPLINK op. De Blog V3 haalt
-# niet de hele 5 MHz in één keer binnen; we kijken naar ~2.4 MHz rond de center.
+# niet de hele 5 MHz in één keer binnen; we kijken naar ~3.2 MHz rond de center.
 # Verschuif de center (banddropdown) om een ander stuk te zien.
 BAND_LOW_MHZ  = 390.0
 BAND_HIGH_MHZ = 395.0
 DEFAULT_CENTER_MHZ = 392.5
 
-SAMPLE_RATE   = 2_400_000      # stabiele sample rate voor de Blog V3
+SAMPLE_RATE   = 3_200_000      # 3.2 MS/s: breder venster (Blog V3 aan; bij
+                               # sample-drops eventueel terug naar 2_400_000)
 FFT_SIZE      = 2048
 CHANNEL_KHZ   = 25.0           # TETRA-kanaalraster: 25 kHz
 WFALL_ROWS    = 120
@@ -781,12 +782,12 @@ class MainWindow(QMainWindow):
         self.band.setStyleSheet(
             f"QComboBox {{ background:{C['panel2']}; color:{C['gray1']}; "
             f"border:1px solid {C['sep']}; border-radius:5px; padding:4px 8px; }}")
-        self._bands = [("Uplink 390.0–392.4 (laag)", 391.2),
-                       ("Uplink 391.3–393.7 (midden)", 392.5),
-                       ("Uplink 392.6–395.0 (hoog)", 393.8),
-                       ("Downlink 380.0–382.4 (laag)", 381.2),
-                       ("Downlink 381.3–383.7 (midden)", 382.5),
-                       ("Downlink 382.6–385.0 (hoog)", 383.8)]
+        self._bands = [("Uplink 389.9–393.1 (laag)", 391.5),
+                       ("Uplink 390.9–394.1 (midden)", 392.5),
+                       ("Uplink 391.9–395.1 (hoog)", 393.5),
+                       ("Downlink 379.9–383.1 (laag)", 381.5),
+                       ("Downlink 380.9–384.1 (midden)", 382.5),
+                       ("Downlink 381.9–385.1 (hoog)", 383.5)]
         for name, _ in self._bands:
             self.band.addItem(name)
         self.band.setCurrentIndex(1)   # uplink midden

@@ -56,7 +56,7 @@ daarna scannen. Sluit het venster om te stoppen.
 | `--device` | dongle index (default 0) |
 | `--extern` | rtl_tcp draait al; niet zelf starten/stoppen |
 
-De band is breder dan wat de dongle in één keer ziet (~2.4 MHz). Met de
+De band is breder dan wat de dongle in één keer ziet (~3.2 MHz). Met de
 **banddropdown** rechtsonder schuif je tussen het lage, midden- en hoge deel van
 380–385 MHz.
 
