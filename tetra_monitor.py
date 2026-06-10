@@ -292,6 +292,13 @@ class Detector(threading.Thread):
         self.hard_thr = HARD_THRESHOLD_DB
         self.muted = False
 
+        # Auto gain-reductie: bij oversturing (clipping) gain omlaag, bij ruimte
+        # weer terug omhoog tot agc_max (= de door de gebruiker ingestelde gain).
+        self.auto_gain_reduction = False
+        self.agc_max = source.gain_db
+        self.clip_peak = 0.0           # 1.0 = tegen clipping aan
+        self._agc_last = 0.0
+
         self.channels: dict[float, Channel] = {}
         self.status = "Opstarten…"
         self.n_frames = 0
@@ -351,6 +358,22 @@ class Detector(threading.Thread):
                 self._reconnect()
                 buf.clear()
 
+    def _agc_step(self, peak, now):
+        """Automatische gain-reductie met hysterese en cooldown."""
+        if now - self._agc_last < 0.5:
+            return
+        g = self.src.gain_db
+        if peak > 0.95 and g > 0:                 # oversturing → snel omlaag
+            self.src.gain_db = max(0.0, g - 3.0)
+            self.src.apply_gain()
+            self._agc_last = now
+            self.n_frames = 0                     # ruisvloer opnieuw inregelen
+        elif peak < 0.5 and g < self.agc_max:     # ruim onder → langzaam omhoog
+            self.src.gain_db = min(self.agc_max, g + 1.0)
+            self.src.apply_gain()
+            self._agc_last = now
+            self.n_frames = 0
+
     def _reconnect(self):
         self.status = "Herverbinden…"
         while self.running:
@@ -367,10 +390,14 @@ class Detector(threading.Thread):
 
     def _process(self, raw):
         iq = (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 127.5) / 127.5
+        self.clip_peak = float(np.abs(iq).max())   # 1.0 = tegen clipping aan
         samples = (iq[0::2] + 1j * iq[1::2]) * self.window
         spec = np.fft.fftshift(np.abs(np.fft.fft(samples, FFT_SIZE)))
         power = 20.0 * np.log10(spec / FFT_SIZE + 1e-10)
         now = time.time()
+
+        if self.auto_gain_reduction:
+            self._agc_step(self.clip_peak, now)
 
         with self.lock:
             self.wfall = np.roll(self.wfall, 1, axis=0)
@@ -473,6 +500,9 @@ class Detector(threading.Thread):
                 "alarm_freq": self.alarm_freq,
                 "alarm_db": self.alarm_db,
                 "active": active,
+                "gain": self.src.gain_db,
+                "clip_peak": self.clip_peak,
+                "agc": self.auto_gain_reduction,
             }
 
     @staticmethod
@@ -699,7 +729,11 @@ class Slider(QWidget):
         return self.lo + self.s.value() * self.step
 
     def set_value(self, val):
+        # Stelt de schuif in zonder changed-signaal (label wel bijwerken).
+        self.s.blockSignals(True)
         self.s.setValue(round((val - self.lo) / self.step))
+        self.s.blockSignals(False)
+        self.val.setText(self.fmt.format(val))
 
 
 # ── Hoofdvenster ────────────────────────────────────────────────────────────
@@ -807,6 +841,14 @@ class MainWindow(QMainWindow):
             row.addWidget(b)
         right.addLayout(row)
 
+        self.btn_agc = QPushButton("Auto gain-reductie: UIT")
+        self.btn_agc.clicked.connect(self._toggle_agc)
+        self.btn_agc.setStyleSheet(
+            f"QPushButton {{ background:{C['panel']}; color:{C['gray1']}; "
+            f"border:1px solid {C['sep']}; border-radius:8px; padding:7px; }}"
+            f"QPushButton:hover {{ background:{C['panel2']}; }}")
+        right.addWidget(self.btn_agc)
+
         self.stat = QLabel("Opstarten…")
         self.stat.setFont(sys_font(9)); self.stat.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.stat.setStyleSheet(f"color:{C['gray2']};")
@@ -842,6 +884,23 @@ class MainWindow(QMainWindow):
         self.det.src.gain_db = v
         self.det.src.auto_gain = False
         self.det.src.apply_gain()
+        # Handmatige gain bepaalt ook het plafond voor de auto-reductie.
+        self.det.agc_max = v
+
+    def _toggle_agc(self):
+        self.det.auto_gain_reduction = not self.det.auto_gain_reduction
+        if self.det.auto_gain_reduction:
+            self.det.agc_max = self.det.src.gain_db   # plafond = huidige gain
+            self.btn_agc.setText("Auto gain-reductie: AAN")
+            self.btn_agc.setStyleSheet(
+                f"QPushButton {{ background:{C['panel']}; color:{C['green']}; "
+                f"border:1px solid {C['green']}; border-radius:8px; padding:7px; }}")
+        else:
+            self.btn_agc.setText("Auto gain-reductie: UIT")
+            self.btn_agc.setStyleSheet(
+                f"QPushButton {{ background:{C['panel']}; color:{C['gray1']}; "
+                f"border:1px solid {C['sep']}; border-radius:8px; padding:7px; }}"
+                f"QPushButton:hover {{ background:{C['panel2']}; }}")
 
     def _on_soft(self, v):
         self.det.soft_thr = v
@@ -872,8 +931,17 @@ class MainWindow(QMainWindow):
         self.banner.update_state(snap["alarm_level"], snap["alarm_freq"],
                                  snap["alarm_db"], snap["status"])
         self.bars.update_data(snap["active"], self.det.soft_thr, self.det.hard_thr)
+
+        # Auto gain-reductie: schuif volgen + oversturing tonen.
+        if snap["agc"] and abs(snap["gain"] - self.sl_gain.value()) >= 0.5:
+            self.sl_gain.set_value(snap["gain"])
+        extra = ""
+        if snap["clip_peak"] > 0.95:
+            extra = "   ·   ⚠ OVERSTUUR"
+        elif snap["agc"]:
+            extra = f"   ·   gain {snap['gain']:.0f} dB (auto)"
         self.stat.setText(snap["status"] +
-                          f"   ·   ruisvloer {snap['noise_floor']:.0f} dB")
+                          f"   ·   ruisvloer {snap['noise_floor']:.0f} dB" + extra)
         # Nieuwe detecties → geschiedenis
         pending, self._pending = self._pending, []
         for freq, db, level in pending:

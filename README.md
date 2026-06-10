@@ -64,6 +64,11 @@ De band is breder dan wat de dongle in één keer ziet (~3.2 MHz). Met de
 
 - **Gain** te hoog → veel ruis en valse activiteit; te laag → je mist zwakke
   signalen. Begin bij 40 dB en stel bij.
+- **Auto gain-reductie** (knop): zet deze aan als je dicht bij sterke zenders
+  staat. Bij oversturing (clipping) draait hij de gain automatisch omlaag en,
+  zodra er weer ruimte is, terug omhoog tot de waarde die je zelf had ingesteld.
+  De gain-schuif volgt mee en de statusregel toont "⚠ OVERSTUUR" zolang het
+  signaal te sterk is.
 - **Drempels** bepalen wanneer iets oranje/rood wordt. Op een rustige plek kun je
   ze verlagen, in een drukke RF-omgeving verhogen.
 - Verandert de omgeving sterk? Klik **Reset ruisvloer**.
