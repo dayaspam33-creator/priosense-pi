@@ -51,7 +51,7 @@ APP_NAME      = "TetraMonitor"
 # Verschuif de center (banddropdown) om een ander stuk te zien.
 BAND_LOW_MHZ  = 390.0
 BAND_HIGH_MHZ = 395.0
-DEFAULT_CENTER_MHZ = 392.5
+DEFAULT_CENTER_MHZ = 382.5
 
 SAMPLE_RATE   = 3_200_000      # 3.2 MS/s: breder venster (Blog V3 aan; bij
                                # sample-drops eventueel terug naar 2_400_000)
@@ -790,7 +790,7 @@ class MainWindow(QMainWindow):
                        ("Downlink 381.9–385.1 (hoog)", 383.5)]
         for name, _ in self._bands:
             self.band.addItem(name)
-        self.band.setCurrentIndex(1)   # uplink midden
+        self.band.setCurrentIndex(4)   # downlink midden (382.5 MHz)
         self.band.currentIndexChanged.connect(self._on_band)
         right.addWidget(self.band)
 

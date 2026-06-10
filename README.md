@@ -49,7 +49,7 @@ daarna scannen. Sluit het venster om te stoppen.
 
 | Optie | Betekenis |
 |---|---|
-| `--center` | centerfrequentie in MHz (default 392.5 = uplink midden) |
+| `--center` | centerfrequentie in MHz (default 382.5 = downlink midden) |
 | `--gain` | tuner gain in dB (default 40) |
 | `--ppm` | frequentiecorrectie in ppm (bij de V3 vaak 0–1) |
 | `--port` | rtl_tcp poort (default 1234) |
