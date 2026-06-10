@@ -1,9 +1,14 @@
 # TetraMonitor
 
 Een TETRA/C2000 **activiteitsmonitor** voor de RTL-SDR Blog V3. Hij meet of er
-zenders actief zijn in de TETRA-downlinkband (380–385 MHz) en zet dat om in
-beeld: een groot activiteitsbanner, live spectrum, waterfall, activiteitsbalken
-per kanaal met richting (nadert/gaat weg), een geluidsalarm en een CSV-log.
+zenders actief zijn in de TETRA-band en zet dat om in beeld: een groot
+activiteitsbanner, live spectrum, waterfall, activiteitsbalken per kanaal met
+richting (nadert/gaat weg), een geluidsalarm en een CSV-log.
+
+Standaard kijkt hij naar de **uplink** (390–395 MHz) — de portofoons en
+voertuigen die zelf zenden, wat je met een magneetantenne dichtbij het beste
+oppikt. Via de banddropdown schakel je naar de **downlink** (380–385 MHz, de
+basisstations).
 
 > **Let op:** dit programma **decodeert niets**. Het meet alleen signaalsterkte
 > (energie boven de ruisvloer) om te laten zien *dát* er activiteit is. Het
@@ -44,7 +49,7 @@ daarna scannen. Sluit het venster om te stoppen.
 
 | Optie | Betekenis |
 |---|---|
-| `--center` | centerfrequentie in MHz (default 382.5) |
+| `--center` | centerfrequentie in MHz (default 392.5 = uplink midden) |
 | `--gain` | tuner gain in dB (default 40) |
 | `--ppm` | frequentiecorrectie in ppm (bij de V3 vaak 0–1) |
 | `--port` | rtl_tcp poort (default 1234) |

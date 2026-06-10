@@ -43,12 +43,15 @@ import pyqtgraph as pg
 # ── Instellingen ────────────────────────────────────────────────────────────
 APP_NAME      = "TetraMonitor"
 
-# TETRA-downlink (basisstations) in NL: 380–385 MHz. De Blog V3 haalt niet de
-# hele 5 MHz in één keer betrouwbaar binnen; we kijken naar een venster van
-# 2.4 MHz rond de centerfrequentie. Verschuif de center om een ander stuk te zien.
-BAND_LOW_MHZ  = 380.0
-BAND_HIGH_MHZ = 385.0
-DEFAULT_CENTER_MHZ = 382.5
+# TETRA-banden in NL (C2000):
+#   Uplink   (portofoons/voertuigen zenden zelf): 390–395 MHz  ← standaard
+#   Downlink (basisstations zenden):              380–385 MHz
+# Met een magneetantenne dichtbij pik je vooral de UPLINK op. De Blog V3 haalt
+# niet de hele 5 MHz in één keer binnen; we kijken naar ~2.4 MHz rond de center.
+# Verschuif de center (banddropdown) om een ander stuk te zien.
+BAND_LOW_MHZ  = 390.0
+BAND_HIGH_MHZ = 395.0
+DEFAULT_CENTER_MHZ = 392.5
 
 SAMPLE_RATE   = 2_400_000      # stabiele sample rate voor de Blog V3
 FFT_SIZE      = 2048
@@ -58,8 +61,8 @@ WFALL_ROWS    = 120
 # Detectie: niveaus zijn in dB BOVEN de geschatte ruisvloer.
 DEFAULT_GAIN_DB   = 40.0       # Blog V3 tuner gain; ~40 dB is een goed startpunt
 NOISE_PERCENTILE  = 30         # ruisvloer = 30e percentiel van het spectrum
-SOFT_THRESHOLD_DB = 8.0        # oranje: waarschijnlijk activiteit
-HARD_THRESHOLD_DB = 16.0       # rood: duidelijke, sterke activiteit
+SOFT_THRESHOLD_DB = 12.0       # oranje: waarschijnlijk activiteit
+HARD_THRESHOLD_DB = 22.0       # rood: duidelijke, sterke activiteit
 WARMUP_FRAMES     = 60         # frames om de ruisvloer op te bouwen
 HANG_TIME_S       = 4.0        # hoe lang een kanaal "actief" blijft na de piek
 TREND_HISTORY     = 12         # samples voor nadert/gaat-weg bepaling
@@ -766,24 +769,27 @@ class MainWindow(QMainWindow):
         self.sl_gain.changed.connect(self._on_gain)
         right.addWidget(self._panel(self.sl_gain))
 
-        self.sl_soft = Slider("Drempel oranje (dB)", 3, 30, self.det.soft_thr, color=C["orange"])
-        self.sl_soft.changed.connect(lambda v: setattr(self.det, "soft_thr", v))
+        self.sl_soft = Slider("Drempel oranje (dB)", 3, 50, self.det.soft_thr, color=C["orange"])
+        self.sl_soft.changed.connect(self._on_soft)
         right.addWidget(self._panel(self.sl_soft))
 
-        self.sl_hard = Slider("Drempel rood (dB)", 8, 40, self.det.hard_thr, color=C["red"])
-        self.sl_hard.changed.connect(lambda v: setattr(self.det, "hard_thr", v))
+        self.sl_hard = Slider("Drempel rood (dB)", 8, 70, self.det.hard_thr, color=C["red"])
+        self.sl_hard.changed.connect(self._on_hard)
         right.addWidget(self._panel(self.sl_hard))
 
         self.band = QComboBox()
         self.band.setStyleSheet(
             f"QComboBox {{ background:{C['panel2']}; color:{C['gray1']}; "
             f"border:1px solid {C['sep']}; border-radius:5px; padding:4px 8px; }}")
-        self._bands = [("380.0–382.4 MHz (laag)", 381.2),
-                       ("381.3–383.7 MHz (midden)", 382.5),
-                       ("382.6–385.0 MHz (hoog)", 383.8)]
+        self._bands = [("Uplink 390.0–392.4 (laag)", 391.2),
+                       ("Uplink 391.3–393.7 (midden)", 392.5),
+                       ("Uplink 392.6–395.0 (hoog)", 393.8),
+                       ("Downlink 380.0–382.4 (laag)", 381.2),
+                       ("Downlink 381.3–383.7 (midden)", 382.5),
+                       ("Downlink 382.6–385.0 (hoog)", 383.8)]
         for name, _ in self._bands:
             self.band.addItem(name)
-        self.band.setCurrentIndex(1)
+        self.band.setCurrentIndex(1)   # uplink midden
         self.band.currentIndexChanged.connect(self._on_band)
         right.addWidget(self.band)
 
@@ -835,6 +841,16 @@ class MainWindow(QMainWindow):
         self.det.src.gain_db = v
         self.det.src.auto_gain = False
         self.det.src.apply_gain()
+
+    def _on_soft(self, v):
+        self.det.soft_thr = v
+        # Rood mag nooit onder oranje zakken.
+        if self.det.hard_thr < v:
+            self.det.hard_thr = v
+            self.sl_hard.set_value(v)
+
+    def _on_hard(self, v):
+        self.det.hard_thr = max(v, self.det.soft_thr)
 
     def _on_band(self, idx):
         _, center = self._bands[idx]
