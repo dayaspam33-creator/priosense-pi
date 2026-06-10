@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+tetra_activiteit.csv
+_alarm.wav
+.DS_Store
+build/
+dist/
+*.spec
