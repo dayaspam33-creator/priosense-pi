@@ -31,7 +31,7 @@ from datetime import datetime
 
 import numpy as np
 
-from PyQt6.QtCore import Qt, QTimer, QRectF, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QRectF, QSettings, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QPainterPath, QTransform
 from PyQt6.QtWidgets import (
     QApplication, QComboBox, QFrame, QHBoxLayout, QLabel, QMainWindow,
@@ -744,6 +744,18 @@ class MainWindow(QMainWindow):
         self.det.on_detection = self._on_detection
         self._pending = []   # detecties uit detector-thread, in GUI-thread verwerkt
 
+        # Bewaarde instellingen laden en toepassen vóór de UI wordt opgebouwd,
+        # zodat schuiven/dropdowns meteen op de juiste waarde starten.
+        self._settings = QSettings(APP_NAME, APP_NAME)
+        s = self._load_settings()
+        self.det.soft_thr      = s["soft_thr"]
+        self.det.hard_thr      = s["hard_thr"]
+        self.det.muted         = s["muted"]
+        self.det.src.gain_db   = s["gain"]
+        self.det.agc_max       = s["gain"]
+        self._gain_mode        = s["gain_mode"]
+        self._init_band_idx    = s["band_idx"]
+
         self.setWindowTitle(f"{APP_NAME} — TETRA activiteitsmonitor")
         self.setMinimumSize(1080, 680)
         self.setStyleSheet(f"QMainWindow, QWidget {{ background:{C['bg']}; color:{C['gray1']}; }}")
@@ -824,9 +836,18 @@ class MainWindow(QMainWindow):
                        ("Downlink 381.9–385.1 (hoog)", 383.5)]
         for name, _ in self._bands:
             self.band.addItem(name)
-        self.band.setCurrentIndex(4)   # downlink midden (382.5 MHz)
+        self.band.setCurrentIndex(self._init_band_idx)
         self.band.currentIndexChanged.connect(self._on_band)
         right.addWidget(self.band)
+
+        # Gain-modus dropdown
+        self.gain_mode = QComboBox()
+        self.gain_mode.setStyleSheet(self.band.styleSheet())
+        for name in ("Gain: Handmatig", "Gain: Auto-reductie", "Gain: Volautomatisch"):
+            self.gain_mode.addItem(name)
+        self.gain_mode.setCurrentIndex(self._gain_mode)
+        self.gain_mode.currentIndexChanged.connect(self._set_gain_mode)
+        right.addWidget(self.gain_mode)
 
         row = QHBoxLayout()
         self.btn_mute = QPushButton("🔊 Geluid aan")
@@ -841,19 +862,16 @@ class MainWindow(QMainWindow):
             row.addWidget(b)
         right.addLayout(row)
 
-        self.btn_agc = QPushButton("Auto gain-reductie: UIT")
-        self.btn_agc.clicked.connect(self._toggle_agc)
-        self.btn_agc.setStyleSheet(
-            f"QPushButton {{ background:{C['panel']}; color:{C['gray1']}; "
-            f"border:1px solid {C['sep']}; border-radius:8px; padding:7px; }}"
-            f"QPushButton:hover {{ background:{C['panel2']}; }}")
-        right.addWidget(self.btn_agc)
-
         self.stat = QLabel("Opstarten…")
         self.stat.setFont(sys_font(9)); self.stat.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.stat.setStyleSheet(f"color:{C['gray2']};")
         right.addWidget(self.stat)
         body.addWidget(rw)
+
+        # Bewaarde stand op de hardware/UI toepassen.
+        self._update_mute_button()
+        self._set_gain_mode(self._gain_mode)
+        self._on_band(self._init_band_idx)
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._tick)
@@ -887,20 +905,27 @@ class MainWindow(QMainWindow):
         # Handmatige gain bepaalt ook het plafond voor de auto-reductie.
         self.det.agc_max = v
 
-    def _toggle_agc(self):
-        self.det.auto_gain_reduction = not self.det.auto_gain_reduction
-        if self.det.auto_gain_reduction:
-            self.det.agc_max = self.det.src.gain_db   # plafond = huidige gain
-            self.btn_agc.setText("Auto gain-reductie: AAN")
-            self.btn_agc.setStyleSheet(
-                f"QPushButton {{ background:{C['panel']}; color:{C['green']}; "
-                f"border:1px solid {C['green']}; border-radius:8px; padding:7px; }}")
-        else:
-            self.btn_agc.setText("Auto gain-reductie: UIT")
-            self.btn_agc.setStyleSheet(
-                f"QPushButton {{ background:{C['panel']}; color:{C['gray1']}; "
-                f"border:1px solid {C['sep']}; border-radius:8px; padding:7px; }}"
-                f"QPushButton:hover {{ background:{C['panel2']}; }}")
+    def _set_gain_mode(self, idx):
+        """0 = Handmatig, 1 = Auto-reductie (software), 2 = Volautomatisch (tuner)."""
+        self._gain_mode = idx
+        g = self.sl_gain.value()
+        if idx == 0:        # Handmatig
+            self.det.auto_gain_reduction = False
+            self.det.src.auto_gain = False
+            self.det.src.gain_db = g
+            self.det.agc_max = g
+            self.sl_gain.setEnabled(True)
+        elif idx == 1:      # Auto-reductie: plafond = ingestelde gain
+            self.det.auto_gain_reduction = True
+            self.det.src.auto_gain = False
+            self.det.src.gain_db = g
+            self.det.agc_max = g
+            self.sl_gain.setEnabled(True)
+        else:               # Volautomatisch: tuner regelt zelf
+            self.det.auto_gain_reduction = False
+            self.det.src.auto_gain = True
+            self.sl_gain.setEnabled(False)
+        self.det.src.apply_gain()
 
     def _on_soft(self, v):
         self.det.soft_thr = v
@@ -921,7 +946,20 @@ class MainWindow(QMainWindow):
 
     def _toggle_mute(self):
         self.det.muted = not self.det.muted
-        self.btn_mute.setText("🔇 Gedempt" if self.det.muted else "🔊 Geluid aan")
+        self._update_mute_button()
+
+    def _update_mute_button(self):
+        if self.det.muted:
+            self.btn_mute.setText("🔇 Gedempt")
+            self.btn_mute.setStyleSheet(
+                f"QPushButton {{ background:{C['panel']}; color:{C['gray2']}; "
+                f"border:1px solid {C['gray2']}; border-radius:8px; padding:7px; }}")
+        else:
+            self.btn_mute.setText("🔊 Geluid aan")
+            self.btn_mute.setStyleSheet(
+                f"QPushButton {{ background:{C['panel']}; color:{C['gray1']}; "
+                f"border:1px solid {C['sep']}; border-radius:8px; padding:7px; }}"
+                f"QPushButton:hover {{ background:{C['panel2']}; }}")
 
     def _tick(self):
         snap = self.det.snapshot()
@@ -947,7 +985,39 @@ class MainWindow(QMainWindow):
         for freq, db, level in pending:
             self.history.add(freq, db, level)
 
+    # ── instellingen bewaren/laden ──
+    def _load_settings(self):
+        st = self._settings
+
+        def num(key, default, cast, lo=None, hi=None):
+            try:
+                v = cast(st.value(key, default))
+            except (TypeError, ValueError):
+                return default
+            if lo is not None and v < lo: return default
+            if hi is not None and v > hi: return default
+            return v
+
+        return {
+            "gain":      num("gain",      self.det.src.gain_db, float, 0,  49),
+            "soft_thr":  num("soft_thr",  self.det.soft_thr,    float, 3,  50),
+            "hard_thr":  num("hard_thr",  self.det.hard_thr,    float, 8,  70),
+            "band_idx":  num("band_idx",  4,                    int,   0,  5),
+            "gain_mode": num("gain_mode", 0,                    int,   0,  2),
+            "muted":     st.value("muted", "false") == "true",
+        }
+
+    def _save_settings(self):
+        st = self._settings
+        st.setValue("gain",      self.sl_gain.value())
+        st.setValue("soft_thr",  self.det.soft_thr)
+        st.setValue("hard_thr",  self.det.hard_thr)
+        st.setValue("band_idx",  self.band.currentIndex())
+        st.setValue("gain_mode", self._gain_mode)
+        st.setValue("muted",     "true" if self.det.muted else "false")
+
     def closeEvent(self, event):
+        self._save_settings()
         self.timer.stop()
         self.det.stop()
         self.det.src.close()
