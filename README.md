@@ -60,7 +60,7 @@ daarna scannen. Sluit het venster om te stoppen.
 
 | Optie | Betekenis |
 |---|---|
-| `--center` | centerfrequentie in MHz (default 382.5 = downlink midden) |
+| `--center` | centerfrequentie in MHz (default 382.5 = uplink midden) |
 | `--gain` | tuner gain in dB (default 40) |
 | `--ppm` | frequentiecorrectie in ppm (bij de V3 vaak 0–1) |
 | `--port` | rtl_tcp poort (default 1234) |
@@ -82,10 +82,39 @@ De band is breder dan wat de dongle in één keer ziet (~3.2 MHz). Met de
     had ingesteld. De schuif volgt mee; de statusregel toont "⚠ OVERSTUUR".
   - *Volautomatisch* — de tuner regelt de gain zelf (hardware-AGC).
 
-Instellingen (gain, drempels, band, gain-modus, mute) worden automatisch
-bewaard en bij de volgende start weer geladen.
+  Standaard staat de modus op **Auto-reductie**, zodat hij niet overstuurt als
+  je dicht bij een zender komt.
 - **Drempels** bepalen wanneer iets oranje/rood wordt. Op een rustige plek kun je
   ze verlagen, in een drukke RF-omgeving verhogen.
 - Verandert de omgeving sterk? Klik **Reset ruisvloer**.
+
+Instellingen (gain, drempels, band, gain-modus, mute) worden automatisch
+bewaard en bij de volgende start weer geladen.
+
+## Zeer dichtbij een zender (bijv. een politieauto naast je)
+
+Als een zender vlak naast je staat, is het signaal zó sterk dat de dongle
+**overstuurt** (clipping). Het hele spectrum vervuilt en de nette piek valt weg —
+zonder maatregel zou de monitor juist stil vallen. TetraMonitor lost dit op twee
+manieren op:
+
+- **Oversturing = direct rood alarm.** Herkent hij clipping, dan toont het banner
+  "🚨 ZEER STERK SIGNAAL DICHTBIJ" en gaat het alarm af — precies wanneer er iets
+  vlakbij zendt.
+- **Auto gain-reductie** draait de gain dan snel omlaag, zodat de meting óók van
+  dichtbij blijft werken; rij je weg, dan klimt de gain vanzelf terug.
+
+## Auto-negeerlijst (blacklist)
+
+Een kanaal dat **te lang ononderbroken actief** is (standaard >20 s), is bijna
+zeker een constante storingsbron — echt TETRA-verkeer is kort en sporadisch.
+Zulke kanalen komen automatisch op de **negeerlijst** en stoppen met alarmeren;
+de statusregel toont hoeveel kanalen genegeerd worden. Wordt zo'n kanaal lang
+genoeg stil, dan doet het weer mee. Met **Wis negeerlijst** maak je de lijst
+handmatig leeg.
+
+> Op de **downlink** (390–395) zendt het controlekanaal continu; dat belandt dan
+> ook op de negeerlijst. Dat is meestal juist gewenst voor een *activiteits*-
+> monitor (je wilt nieuwe bursts zien, niet de constante draaggolf).
 
 Activiteit wordt gelogd naar `tetra_activiteit.csv` naast het script.

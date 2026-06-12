@@ -71,6 +71,17 @@ HARD_THRESHOLD_DB = 22.0       # rood: duidelijke, sterke activiteit
 WARMUP_FRAMES     = 60         # frames om de ruisvloer op te bouwen
 HANG_TIME_S       = 4.0        # hoe lang een kanaal "actief" blijft na de piek
 TREND_HISTORY     = 12         # samples voor nadert/gaat-weg bepaling
+
+# Auto-blacklist: een kanaal dat heel lang ononderbroken "actief" is, is bijna
+# zeker een constante storing (TETRA-verkeer is juist kort/sporadisch). Dat
+# kanaal wordt genegeerd tot het lang genoeg stil is (of handmatig gewist).
+BLACKLIST_SECONDS   = 20.0     # zo lang continu actief → negeren
+UNBLACKLIST_QUIET_S = 15.0     # zo lang stil → weer meedoen
+
+# Oversturing (front-end overload): als een zender vlakbij staat klipt de dongle
+# en valt de meting weg. Dat herkennen we aan de piek van de ruwe IQ-samples en
+# behandelen we als "zeer sterk signaal dichtbij" → direct rood alarm.
+OVERLOAD_CLIP     = 0.90       # gemiddelde clip-piek hierboven = oversturing
 LOG_COOLDOWN_S    = 10.0       # min. tijd tussen logregels per kanaal
 SIREN_COOLDOWN_S  = 10.0
 
@@ -269,13 +280,17 @@ class RtlTcpSource:
 
 # ── Detector ────────────────────────────────────────────────────────────────
 class Channel:
-    __slots__ = ("freq", "level", "peak", "hang_until", "history")
+    __slots__ = ("freq", "level", "peak", "hang_until", "history",
+                 "active_since", "quiet_since", "blacklisted")
     def __init__(self, freq):
         self.freq = freq
         self.level = 0.0           # huidig niveau boven ruisvloer (dB)
         self.peak = 0.0            # hoogste recente niveau (dB)
         self.hang_until = 0.0
         self.history = deque(maxlen=TREND_HISTORY)
+        self.active_since = 0.0    # begin van huidige aaneengesloten activiteit
+        self.quiet_since = 0.0     # sinds wanneer stil (voor un-blacklist)
+        self.blacklisted = False   # constante storing → negeren
 
 class Detector(threading.Thread):
     """Leest IQ van rtl_tcp, berekent per-kanaal activiteit boven de ruisvloer."""
@@ -303,9 +318,12 @@ class Detector(threading.Thread):
         # weer terug omhoog tot agc_max (= de door de gebruiker ingestelde gain).
         self.auto_gain_reduction = False
         self.agc_max = source.gain_db
-        self.clip_peak = 0.0           # 1.0 = tegen clipping aan
+        self.clip_peak = 0.0           # 1.0 = tegen clipping aan (per frame)
+        self.clip_avg = 0.2            # gladgestreken clip-piek (voor oversturing)
+        self.overload = False          # front-end overstuur (zender zeer dichtbij)
         self._agc_last = 0.0
 
+        self.auto_blacklist = True     # constante storingskanalen negeren
         self.channels: dict[float, Channel] = {}
         self.status = "Opstarten…"
         self.n_frames = 0
@@ -313,6 +331,7 @@ class Detector(threading.Thread):
         self.alarm_freq = 0.0
         self.alarm_db = 0.0
         self._alarm_until = 0.0
+        self._prev_level = 0       # voor flank-detectie (geschiedenis/sirene)
 
         self._last_log = {}
         self._last_siren = 0.0
@@ -356,6 +375,15 @@ class Detector(threading.Thread):
             self.n_frames = 0
             self.channels.clear()
 
+    def clear_blacklist(self):
+        with self.lock:
+            for ch in self.channels.values():
+                ch.blacklisted = False
+                ch.active_since = 0.0
+
+    def blacklist_count(self):
+        return sum(1 for ch in self.channels.values() if ch.blacklisted)
+
     # ── hoofdlus ──
     def run(self):
         self.running = True
@@ -380,14 +408,19 @@ class Detector(threading.Thread):
 
     def _agc_step(self, peak, now):
         """Automatische gain-reductie met hysterese en cooldown."""
-        if now - self._agc_last < 0.5:
+        if now - self._agc_last < 0.4:
             return
         g = self.src.gain_db
-        if peak > 0.95 and g > 0:                 # oversturing → snel omlaag
-            self.src.gain_db = max(0.0, g - 3.0)
+        if peak >= 0.99 and g > 0:                # harde clipping → grote stap
+            self.src.gain_db = max(0.0, g - 6.0)
             self.src.apply_gain()
             self._agc_last = now
             self.n_frames = 0                     # ruisvloer opnieuw inregelen
+        elif peak > 0.95 and g > 0:               # oversturing → omlaag
+            self.src.gain_db = max(0.0, g - 3.0)
+            self.src.apply_gain()
+            self._agc_last = now
+            self.n_frames = 0
         elif peak < 0.5 and g < self.agc_max:     # ruim onder → langzaam omhoog
             self.src.gain_db = min(self.agc_max, g + 1.0)
             self.src.apply_gain()
@@ -411,6 +444,10 @@ class Detector(threading.Thread):
     def _process(self, raw):
         iq = (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 127.5) / 127.5
         self.clip_peak = float(np.abs(iq).max())   # 1.0 = tegen clipping aan
+        # Gladgestreken clip-piek: één ruisspikkel telt niet, aanhoudende
+        # oversturing (zender vlakbij) wél.
+        self.clip_avg = 0.85 * self.clip_avg + 0.15 * self.clip_peak
+        self.overload = self.clip_avg > OVERLOAD_CLIP
         samples = (iq[0::2] + 1j * iq[1::2]) * self.window
         spec = np.fft.fftshift(np.abs(np.fft.fft(samples, FFT_SIZE)))
         lin = (spec / FFT_SIZE) ** 2 + 1e-20         # lineair vermogen per bin
@@ -463,35 +500,58 @@ class Detector(threading.Thread):
                 self.channels[cf_key] = ch
             ch.history.append(level)
             if level > self.soft_thr:
-                ch.level = level
-                ch.peak = max(ch.peak * 0.9, level)
-                ch.hang_until = now + HANG_TIME_S
-                if level > best_db:
-                    best_db, best_freq = level, cf_key
-                self._log(cf_key, level)
+                if ch.active_since == 0.0:
+                    ch.active_since = now
+                ch.quiet_since = 0.0
+                # Te lang ononderbroken actief = constante storing → blacklist.
+                if (self.auto_blacklist and not ch.blacklisted
+                        and now - ch.active_since > BLACKLIST_SECONDS):
+                    ch.blacklisted = True
+                if ch.blacklisted:
+                    ch.level = 0.0                 # genegeerd: niet tonen/alarmeren
+                else:
+                    ch.level = level
+                    ch.peak = max(ch.peak * 0.9, level)
+                    ch.hang_until = now + HANG_TIME_S
+                    if level > best_db:
+                        best_db, best_freq = level, cf_key
+                    self._log(cf_key, level)
             else:
+                ch.active_since = 0.0
+                if ch.quiet_since == 0.0:
+                    ch.quiet_since = now
+                if ch.blacklisted and now - ch.quiet_since > UNBLACKLIST_QUIET_S:
+                    ch.blacklisted = False
                 if now > ch.hang_until:
                     ch.level = 0.0
                     ch.peak *= 0.8
 
-        # Alarmniveau bepalen op het sterkste kanaal.
-        if best_db >= self.hard_thr:
-            self.alarm_level = 2
-            self.alarm_freq, self.alarm_db = best_freq, best_db
+        # Alarmniveau bepalen. Oversturing eerst: als de dongle overstuurt staat
+        # er iets zeer sterks vlakbij — dan juist rood alarm i.p.v. stil vallen.
+        if self.overload:
+            lvl, afreq, adb = 2, best_freq, max(best_db, self.hard_thr)
             self._alarm_until = now + 2.0
-            if not self.muted and now - self._last_siren >= SIREN_COOLDOWN_S:
-                self._last_siren = now
-                threading.Thread(target=play_alarm, daemon=True).start()
-            if self.on_detection:
-                self.on_detection(best_freq, best_db, 2)
+        elif best_db >= self.hard_thr:
+            lvl, afreq, adb = 2, best_freq, best_db
+            self._alarm_until = now + 2.0
         elif best_db >= self.soft_thr:
-            if self.alarm_level == 0 and self.on_detection:
-                self.on_detection(best_freq, best_db, 1)
-            self.alarm_level = 1
-            self.alarm_freq, self.alarm_db = best_freq, best_db
+            lvl, afreq, adb = 1, best_freq, best_db
             self._alarm_until = now + 2.0
-        elif now >= self._alarm_until:
-            self.alarm_level = 0
+        elif now < self._alarm_until:
+            # Korte nahang ná de laatste echte detectie — venster NIET verlengen.
+            lvl, afreq, adb = self.alarm_level, self.alarm_freq, self.alarm_db
+        else:
+            lvl, afreq, adb = 0, 0.0, 0.0
+
+        # Alleen op een stijgende flank loggen/piepen (anders loopt alles vol).
+        if lvl > self._prev_level and lvl >= 1 and afreq > 0 and self.on_detection:
+            self.on_detection(afreq, adb, lvl)
+        if lvl == 2 and not self.muted and now - self._last_siren >= SIREN_COOLDOWN_S:
+            self._last_siren = now
+            threading.Thread(target=play_alarm, daemon=True).start()
+
+        self.alarm_level, self.alarm_freq, self.alarm_db = lvl, afreq, adb
+        self._prev_level = lvl
 
     def _log(self, freq, level):
         now = time.time()
@@ -528,6 +588,8 @@ class Detector(threading.Thread):
                 "gain": self.src.gain_db,
                 "clip_peak": self.clip_peak,
                 "agc": self.auto_gain_reduction,
+                "overload": self.overload,
+                "blacklist": sum(1 for ch in self.channels.values() if ch.blacklisted),
             }
 
     @staticmethod
@@ -568,11 +630,14 @@ class StatusBanner(QFrame):
         lay.addWidget(self.detail)
         self._apply(0)
 
-    def update_state(self, level, freq, db, status):
+    def update_state(self, level, freq, db, status, overload=False):
         if level != self._level or freq != self._freq:
             self._apply(level)
         self._level, self._freq, self._db = level, freq, db
-        if level == 0:
+        if overload:
+            self.title.setText("🚨 ZEER STERK SIGNAAL DICHTBIJ")
+            self.detail.setText("Zender vlakbij — front-end overstuurt")
+        elif level == 0:
             self.title.setText("● GEEN ACTIVITEIT")
             self.detail.setText(status)
         elif level == 1:
@@ -879,7 +944,9 @@ class MainWindow(QMainWindow):
         self.btn_mute.clicked.connect(self._toggle_mute)
         self.btn_reset = QPushButton("Reset ruisvloer")
         self.btn_reset.clicked.connect(self.det.reset_noise_floor)
-        for b in (self.btn_mute, self.btn_reset):
+        self.btn_bl = QPushButton("Wis negeerlijst")
+        self.btn_bl.clicked.connect(self.det.clear_blacklist)
+        for b in (self.btn_mute, self.btn_reset, self.btn_bl):
             b.setStyleSheet(
                 f"QPushButton {{ background:{C['panel']}; color:{C['gray1']}; "
                 f"border:1px solid {C['sep']}; border-radius:8px; padding:7px; }}"
@@ -992,17 +1059,19 @@ class MainWindow(QMainWindow):
         self.nf_line.setValue(snap["noise_floor"])
         self.img.setImage(snap["wfall"].T, autoLevels=False)
         self.banner.update_state(snap["alarm_level"], snap["alarm_freq"],
-                                 snap["alarm_db"], snap["status"])
+                                 snap["alarm_db"], snap["status"], snap["overload"])
         self.bars.update_data(snap["active"], self.det.soft_thr, self.det.hard_thr)
 
         # Auto gain-reductie: schuif volgen + oversturing tonen.
         if snap["agc"] and abs(snap["gain"] - self.sl_gain.value()) >= 0.5:
             self.sl_gain.set_value(snap["gain"])
         extra = ""
-        if snap["clip_peak"] > 0.95:
+        if snap["overload"]:
             extra = "   ·   ⚠ OVERSTUUR"
         elif snap["agc"]:
             extra = f"   ·   gain {snap['gain']:.0f} dB (auto)"
+        if snap["blacklist"]:
+            extra += f"   ·   {snap['blacklist']} genegeerd"
         self.stat.setText(snap["status"] +
                           f"   ·   ruisvloer {snap['noise_floor']:.0f} dB" + extra)
         # Nieuwe detecties → geschiedenis
@@ -1028,7 +1097,7 @@ class MainWindow(QMainWindow):
             "soft_thr":  num("soft_thr",  self.det.soft_thr,    float, 3,  50),
             "hard_thr":  num("hard_thr",  self.det.hard_thr,    float, 8,  70),
             "band_idx":  num("band_idx",  1,                    int,   0,  5),
-            "gain_mode": num("gain_mode", 0,                    int,   0,  2),
+            "gain_mode": num("gain_mode", 1,                    int,   0,  2),
             "muted":     st.value("muted", "false") == "true",
         }
 
