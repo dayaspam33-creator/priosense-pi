@@ -48,6 +48,7 @@ def run():
     det = Detector(StubSource(center_mhz=382.5))
     det.soft_thr = tm.SOFT_THRESHOLD_DB
     det.hard_thr = tm.HARD_THRESHOLD_DB
+    det._log = lambda *a, **k: None   # zelftest niet naar de echte CSV schrijven
 
     # 1) Warmup + ruis: ruisvloer opbouwen, daarna een paar ruisframes.
     for _ in range(tm.WARMUP_FRAMES + 10):
