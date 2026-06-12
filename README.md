@@ -5,10 +5,16 @@ zenders actief zijn in de TETRA-band en zet dat om in beeld: een groot
 activiteitsbanner, live spectrum, waterfall, activiteitsbalken per kanaal met
 richting (nadert/gaat weg), een geluidsalarm en een CSV-log.
 
-Standaard kijkt hij naar de **uplink** (390–395 MHz) — de portofoons en
-voertuigen die zelf zenden, wat je met een magneetantenne dichtbij het beste
-oppikt. Via de banddropdown schakel je naar de **downlink** (380–385 MHz, de
-basisstations).
+Standaard kijkt hij naar de **uplink** (380–385 MHz) — de portofoons en
+voertuigen die zelf zenden. Een eenheid die vlakbij zendt geeft daar een sterk,
+kortdurend signaal, dus dat is wat je met een magneetantenne in/bij de auto het
+beste oppikt. Via de banddropdown schakel je naar de **downlink** (390–395 MHz):
+de basisstations, die continu zenden (controlekanaal) en dus wijzen op C2000-
+infrastructuur in de buurt.
+
+> **Bandindeling (NL C2000, vaste ETSI/CEPT-indeling, 10 MHz duplex):**
+> portofoons/voertuigen zenden op **380–385 MHz** (uplink), basisstations op
+> **390–395 MHz** (downlink).
 
 > **Let op:** dit programma **decodeert niets**. Het meet alleen signaalsterkte
 > (energie boven de ruisvloer) om te laten zien *dát* er activiteit is. Het
@@ -17,9 +23,14 @@ basisstations).
 
 ## Hoe het werkt
 
-- De band wordt opgedeeld in kanalen van 25 kHz (het TETRA-raster).
-- Het programma schat continu de **ruisvloer** en meet per kanaal hoeveel dB een
-  signaal daarbovenuit komt. Zo zie je echte activiteit in plaats van ruis.
+- De band wordt opgedeeld in kanalen van 25 kHz (het TETRA-raster). Een 4096-punts
+  FFT met Blackman-venster geeft fijne resolutie (~0,8 kHz/bin) en houdt naburige
+  kanalen netjes uit elkaar.
+- Per kanaal wordt de **energie over de volle 25 kHz geïntegreerd** en uitgedrukt
+  als dB boven de ruisvloer — dezelfde aanpak als professionele TETRA-sensoren,
+  robuuster dan losse pieken meten.
+- Het programma schat continu de **ruisvloer**, zodat je echte activiteit ziet in
+  plaats van ruis.
 - **Oranje** = mogelijke activiteit, **rood** = sterke, duidelijke activiteit.
 - Pijlen tonen of een signaal **sterker wordt** (▲ nadert) of **zwakker** (▼ gaat
   weg) — handig met een magneetantenne onderweg.

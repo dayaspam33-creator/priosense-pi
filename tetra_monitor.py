@@ -43,25 +43,29 @@ import pyqtgraph as pg
 # ── Instellingen ────────────────────────────────────────────────────────────
 APP_NAME      = "TetraMonitor"
 
-# TETRA-banden in NL (C2000):
-#   Uplink   (portofoons/voertuigen zenden zelf): 390–395 MHz  ← standaard
-#   Downlink (basisstations zenden):              380–385 MHz
-# Met een magneetantenne dichtbij pik je vooral de UPLINK op. De Blog V3 haalt
-# niet de hele 5 MHz in één keer binnen; we kijken naar ~3.2 MHz rond de center.
-# Verschuif de center (banddropdown) om een ander stuk te zien.
-BAND_LOW_MHZ  = 390.0
-BAND_HIGH_MHZ = 395.0
-DEFAULT_CENTER_MHZ = 382.5
+# TETRA-banden in NL (C2000) — vaste ETSI/CEPT-indeling, 10 MHz duplex:
+#   Uplink   (portofoons/voertuigen zenden):  380–385 MHz  ← magneetantenne
+#   Downlink (basisstations zenden continu):   390–395 MHz
+# Met een magneetantenne in/bij de auto pik je vooral de UPLINK op: een eenheid
+# die vlakbij zendt geeft daar een sterk, kortdurend signaal. De downlink staat
+# juist continu aan (controlekanaal) en wijst op infrastructuur in de buurt.
+# De Blog V3 haalt niet de hele 5 MHz in één keer binnen; we kijken naar ~3.2 MHz
+# rond de center. Verschuif de center (banddropdown) om een ander stuk te zien.
+BAND_LOW_MHZ  = 380.0
+BAND_HIGH_MHZ = 385.0
+DEFAULT_CENTER_MHZ = 382.5     # uplink-midden (nabije eenheden)
 
 SAMPLE_RATE   = 3_200_000      # 3.2 MS/s: breder venster (Blog V3 aan; bij
                                # sample-drops eventueel terug naar 2_400_000)
-FFT_SIZE      = 2048
+FFT_SIZE      = 4096           # 0.78 kHz/bin: fijne resolutie + betere scheiding
+                               # tussen naburige 25 kHz-kanalen (minder vals alarm)
 CHANNEL_KHZ   = 25.0           # TETRA-kanaalraster: 25 kHz
 WFALL_ROWS    = 120
 
-# Detectie: niveaus zijn in dB BOVEN de geschatte ruisvloer.
+# Detectie: per kanaal integreren we de energie over de volle 25 kHz (zoals
+# professionele TETRA-sensoren) en drukken die uit als dB boven de ruisvloer.
 DEFAULT_GAIN_DB   = 40.0       # Blog V3 tuner gain; ~40 dB is een goed startpunt
-NOISE_PERCENTILE  = 30         # ruisvloer = 30e percentiel van het spectrum
+NOISE_PERCENTILE  = 30         # ruisvloer (weergave) = 30e percentiel spectrum
 SOFT_THRESHOLD_DB = 12.0       # oranje: waarschijnlijk activiteit
 HARD_THRESHOLD_DB = 22.0       # rood: duidelijke, sterke activiteit
 WARMUP_FRAMES     = 60         # frames om de ruisvloer op te bouwen
@@ -282,10 +286,13 @@ class Detector(threading.Thread):
         self.running = False
         self.lock = threading.Lock()
 
-        self.window = np.hanning(FFT_SIZE).astype(np.float32)
+        # Blackman: lagere zijlobben dan Hanning → betere scheiding van naburige
+        # kanalen, zodat een sterk signaal niet "lekt" naar de buren.
+        self.window = np.blackman(FFT_SIZE).astype(np.float32)
         self.freqs = self._calc_freqs(source.center_hz)
         self.power = np.full(FFT_SIZE, -90.0)
-        self.noise_floor = -70.0
+        self.noise_floor = -70.0           # weergave (amplitude-dB, oranje lijn)
+        self.noise_bin = 1e-7              # detectie: ruisvermogen per bin (lineair)
         self.wfall = np.full((WFALL_ROWS, FFT_SIZE), -90.0)
 
         self.soft_thr = SOFT_THRESHOLD_DB
@@ -311,25 +318,38 @@ class Detector(threading.Thread):
         self._last_siren = 0.0
         self.on_detection = None   # callback(freq, db, level) — gezet door GUI
 
+        self._chan_idx = []
+        self._build_channels()
+
     # ── frequentie-helpers ──
     def _calc_freqs(self, center_hz):
         return np.linspace((center_hz - SAMPLE_RATE / 2) / 1e6,
                            (center_hz + SAMPLE_RATE / 2) / 1e6, FFT_SIZE)
 
-    def _channel_grid(self):
-        lo, hi = self.freqs[0], self.freqs[-1]
+    def _build_channels(self):
+        """Bepaal één keer per afstemming de bin-indices van elk 25 kHz-kanaal,
+        zodat de energie-integratie per frame goedkoop blijft."""
         step = CHANNEL_KHZ / 1000.0
+        half = step / 2.0
+        lo, hi = self.freqs[0], self.freqs[-1]
         start = math.ceil(lo / step) * step
-        return np.arange(start, hi, step)
+        chans = []
+        for cf in np.arange(start, hi, step):
+            idx = np.where((self.freqs >= cf - half) & (self.freqs < cf + half))[0]
+            if idx.size:
+                chans.append((round(float(cf), 4), idx))
+        self._chan_idx = chans
 
     def retune(self, center_mhz):
         hz = int(round(center_mhz * 1e6))
         self.src.set_center(hz)
         with self.lock:
             self.freqs = self._calc_freqs(hz)
+            self._build_channels()
             self.channels.clear()
             self.n_frames = 0
             self.noise_floor = -70.0
+            self.noise_bin = 1e-7
 
     def reset_noise_floor(self):
         with self.lock:
@@ -393,7 +413,8 @@ class Detector(threading.Thread):
         self.clip_peak = float(np.abs(iq).max())   # 1.0 = tegen clipping aan
         samples = (iq[0::2] + 1j * iq[1::2]) * self.window
         spec = np.fft.fftshift(np.abs(np.fft.fft(samples, FFT_SIZE)))
-        power = 20.0 * np.log10(spec / FFT_SIZE + 1e-10)
+        lin = (spec / FFT_SIZE) ** 2 + 1e-20         # lineair vermogen per bin
+        power = 10.0 * np.log10(lin)                 # dB (== 20·log10(amplitude))
         now = time.time()
 
         if self.auto_gain_reduction:
@@ -405,33 +426,37 @@ class Detector(threading.Thread):
             self.power = power
             self.n_frames += 1
 
-            # Ruisvloer: robuuste percentiel-schatting, langzaam meelopend.
+            # Twee ruisschatters: noise_floor (dB, voor de weergave) en noise_bin
+            # (lineair ruisvermogen per bin, voor de energie-integratie hieronder).
             nf_now = float(np.percentile(power, NOISE_PERCENTILE))
+            nb_now = float(np.percentile(lin, 50))   # mediaan = robuuste ruis/bin
             if self.n_frames <= WARMUP_FRAMES:
                 a = 0.1
-                self.noise_floor = nf_now if self.n_frames == 1 else \
-                    (1 - a) * self.noise_floor + a * nf_now
+                if self.n_frames == 1:
+                    self.noise_floor, self.noise_bin = nf_now, nb_now
+                else:
+                    self.noise_floor = (1 - a) * self.noise_floor + a * nf_now
+                    self.noise_bin   = (1 - a) * self.noise_bin   + a * nb_now
                 self.status = f"Ruisvloer meten  {int(100 * self.n_frames / WARMUP_FRAMES)}%"
                 self.alarm_level = 0
                 return
-            # Alleen rustig blijven bijstellen als er weinig signaal is.
+            # Daarna heel langzaam meedrijven (niet meespringen met activiteit).
             self.noise_floor = 0.995 * self.noise_floor + 0.005 * nf_now
+            self.noise_bin   = 0.995 * self.noise_bin   + 0.005 * nb_now
             self.status = "Scannen"
 
-            self._detect(power, now)
+            self._detect(lin, now)
 
-    def _detect(self, power, now):
-        grid = self._channel_grid()
-        half = (CHANNEL_KHZ / 1000.0) / 2.0
+    def _detect(self, lin, now):
         best_freq, best_db = 0.0, 0.0
+        nb = self.noise_bin
 
-        for cf in grid:
-            mask = (self.freqs >= cf - half) & (self.freqs < cf + half)
-            if not mask.any():
-                continue
-            # Kanaalniveau = piek binnen het kanaal boven de ruisvloer.
-            level = float(power[mask].max() - self.noise_floor)
-            cf_key = round(cf, 4)
+        for cf_key, idx in self._chan_idx:
+            # Energie over het hele 25 kHz-kanaal integreren en als SNR (dB)
+            # t.o.v. de ruis uitdrukken — zoals professionele TETRA-sensoren.
+            ch_energy = float(lin[idx].sum())
+            noise_energy = nb * idx.size
+            level = 10.0 * math.log10(ch_energy / noise_energy) if noise_energy > 0 else 0.0
             ch = self.channels.get(cf_key)
             if ch is None:
                 ch = Channel(cf_key)
@@ -828,12 +853,12 @@ class MainWindow(QMainWindow):
         self.band.setStyleSheet(
             f"QComboBox {{ background:{C['panel2']}; color:{C['gray1']}; "
             f"border:1px solid {C['sep']}; border-radius:5px; padding:4px 8px; }}")
-        self._bands = [("Uplink 389.9–393.1 (laag)", 391.5),
-                       ("Uplink 390.9–394.1 (midden)", 392.5),
-                       ("Uplink 391.9–395.1 (hoog)", 393.5),
-                       ("Downlink 379.9–383.1 (laag)", 381.5),
-                       ("Downlink 380.9–384.1 (midden)", 382.5),
-                       ("Downlink 381.9–385.1 (hoog)", 383.5)]
+        self._bands = [("Uplink 379.9–383.1 (laag)", 381.5),
+                       ("Uplink 380.9–384.1 (midden)", 382.5),
+                       ("Uplink 381.9–385.1 (hoog)", 383.5),
+                       ("Downlink 389.9–393.1 (laag)", 391.5),
+                       ("Downlink 390.9–394.1 (midden)", 392.5),
+                       ("Downlink 391.9–395.1 (hoog)", 393.5)]
         for name, _ in self._bands:
             self.band.addItem(name)
         self.band.setCurrentIndex(self._init_band_idx)
@@ -1002,7 +1027,7 @@ class MainWindow(QMainWindow):
             "gain":      num("gain",      self.det.src.gain_db, float, 0,  49),
             "soft_thr":  num("soft_thr",  self.det.soft_thr,    float, 3,  50),
             "hard_thr":  num("hard_thr",  self.det.hard_thr,    float, 8,  70),
-            "band_idx":  num("band_idx",  4,                    int,   0,  5),
+            "band_idx":  num("band_idx",  1,                    int,   0,  5),
             "gain_mode": num("gain_mode", 0,                    int,   0,  2),
             "muted":     st.value("muted", "false") == "true",
         }
