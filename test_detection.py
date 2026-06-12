@@ -3,13 +3,14 @@
 Offline zelftest voor de detectiekern van TetraMonitor.
 
 Voert synthetische IQ-frames door exact dezelfde verwerking als de live-detector
-en controleert:
+en controleert de hele keten:
   1. pure ruis blijft onder de drempel (geen vals alarm);
-  2. een sterke draaggolf wordt op het juiste 25 kHz-kanaal gedetecteerd (rood);
-  3. een kanaal dat te lang continu actief is, komt op de negeerlijst (blacklist)
-     en stopt met alarmeren — en "Wis negeerlijst" maakt hem weer leeg;
-  4. oversturing (clipping, zender zeer dichtbij) forceert rood alarm i.p.v.
-     stil te vallen.
+  2. een breed TETRA-achtig signaal wordt op het juiste 25 kHz-kanaal gedetecteerd;
+  3. een kanaal dat te lang continu actief is komt op de negeerlijst (blacklist);
+  4. oversturing (clipping) forceert rood alarm i.p.v. stil te vallen;
+  5. de DC-spike op de centerfrequentie geeft GEEN vals alarm;
+  6. een smalle toon (birdie/CW) wordt door de bezettingscheck genegeerd;
+  7. CFAR maakt een scheve ruisvloer vlak (lokale i.p.v. globale ruis).
 
 Draait zonder dongle:  python3 test_detection.py
 """
@@ -20,14 +21,13 @@ from tetra_monitor import Detector, FFT_SIZE, SAMPLE_RATE
 
 
 class FakeClock:
-    """Bestuurbare klok zodat de 20s-blacklist niet echt 20 s hoeft te duren."""
     def __init__(self): self.t = 10_000.0
     def time(self): return self.t
     def sleep(self, _): pass
 
 
 clock = FakeClock()
-tm.time = clock   # tetra_monitor gebruikt time.time()/time.sleep()
+tm.time = clock
 
 
 class StubSource:
@@ -43,22 +43,36 @@ def noise_frame(std=6.0):
     return raw.clip(0, 255).astype(np.uint8).tobytes()
 
 
-def signal_frame(offset_hz, amp=35.0, std=6.0):
+def _to_raw(I, Q):
+    raw = np.empty(2 * FFT_SIZE); raw[0::2] = I; raw[1::2] = Q
+    return raw.clip(0, 255).astype(np.uint8).tobytes()
+
+
+def tetra_frame(offset_hz, amp=32.0, width_hz=18000.0, std=6.0):
+    """Breed (~18 kHz) TETRA-achtig signaal: bandbegrensde ruis op center+offset."""
+    n = FFT_SIZE
+    w = np.fft.fftfreq(n, d=1 / SAMPLE_RATE)
+    sp = np.random.randn(n) + 1j * np.random.randn(n)
+    sp[np.abs(w) > width_hz / 2] = 0
+    base = np.fft.ifft(sp); base /= np.std(base.real)
+    t = np.arange(n)
+    sig = base * np.exp(2j * np.pi * offset_hz * t / SAMPLE_RATE)
+    return _to_raw(127.5 + amp * sig.real + np.random.normal(0, std, n),
+                   127.5 + amp * sig.imag + np.random.normal(0, std, n))
+
+
+def tone_frame(offset_hz, amp=35.0, std=6.0):
+    """Smalle pure toon (birdie/CW) — moet door de bezettingscheck genegeerd worden."""
     n = FFT_SIZE; t = np.arange(n)
     c = np.exp(2j * np.pi * offset_hz * t / SAMPLE_RATE)
-    I = 127.5 + amp * c.real + np.random.normal(0, std, n)
-    Q = 127.5 + amp * c.imag + np.random.normal(0, std, n)
-    raw = np.empty(2 * n); raw[0::2] = I; raw[1::2] = Q
-    return raw.clip(0, 255).astype(np.uint8).tobytes()
+    return _to_raw(127.5 + amp * c.real + np.random.normal(0, std, n),
+                   127.5 + amp * c.imag + np.random.normal(0, std, n))
 
 
 def clip_frame(offset_hz=300_000, amp=220.0):
-    """Veel te sterk → samples klippen op 0/255 (front-end overstuur)."""
     n = FFT_SIZE; t = np.arange(n)
     c = np.exp(2j * np.pi * offset_hz * t / SAMPLE_RATE)
-    I = 127.5 + amp * c.real; Q = 127.5 + amp * c.imag
-    raw = np.empty(2 * n); raw[0::2] = I; raw[1::2] = Q
-    return raw.clip(0, 255).astype(np.uint8).tobytes()
+    return _to_raw(127.5 + amp * c.real, 127.5 + amp * c.imag)
 
 
 def feed(det, frame_fn, n, dt=0.05, **kw):
@@ -67,50 +81,77 @@ def feed(det, frame_fn, n, dt=0.05, **kw):
         det._process(frame_fn(**kw))
 
 
-def run():
-    np.random.seed(0)
-    det = Detector(StubSource(center_mhz=382.5))
+def fresh(center_mhz=382.5):
+    det = Detector(StubSource(center_mhz=center_mhz))
     det.soft_thr = tm.SOFT_THRESHOLD_DB
     det.hard_thr = tm.HARD_THRESHOLD_DB
-    det._log = lambda *a, **k: None   # zelftest niet naar de echte CSV schrijven
+    det._log = lambda *a, **k: None
+    feed(det, noise_frame, tm.WARMUP_FRAMES + 5, dt=0.02)
+    return det
 
-    # 1) Warmup + ruis
-    feed(det, noise_frame, tm.WARMUP_FRAMES + 10, dt=0.02)
+
+def run():
+    np.random.seed(0)
+
+    # 1) Ruis → geen vals alarm
+    det = fresh()
+    feed(det, noise_frame, 10, dt=0.02)
     snap = det.snapshot()
-    noise_max = max((lvl for _, lvl, _ in snap["active"]), default=0.0)
-    print(f"[ruis]     actief: {len(snap['active'])}, hoogste: {noise_max:.1f} dB, "
-          f"alarm: {snap['alarm_level']}")
-    assert snap["alarm_level"] == 0 and noise_max < det.soft_thr, "Vals alarm op ruis!"
+    nmax = max((l for _, l, _ in snap["active"]), default=0.0)
+    print(f"[ruis]      actief: {len(snap['active'])}, hoogste: {nmax:.1f} dB")
+    assert snap["alarm_level"] == 0 and nmax < det.soft_thr, "Vals alarm op ruis!"
 
-    # 2) Draaggolf op center + 0.5 MHz → kanaal ~383.000 MHz
-    feed(det, signal_frame, 25, dt=0.05, offset_hz=500_000)
+    # 2) Breed TETRA-achtig signaal op +0.5 MHz → kanaal ~383.000
+    feed(det, tetra_frame, 25, dt=0.05, offset_hz=500_000)
     snap = det.snapshot()
     top_freq, top_lvl, _ = snap["active"][0]
-    print(f"[signaal]  sterkste: {top_freq:.4f} MHz @ {top_lvl:.1f} dB, "
-          f"alarm: {snap['alarm_level']}")
+    print(f"[signaal]   sterkste: {top_freq:.4f} MHz @ {top_lvl:.1f} dB, alarm: {snap['alarm_level']}")
     assert abs(top_freq - 383.0) <= 0.0125, f"Verkeerd kanaal: {top_freq:.4f}"
-    assert top_lvl >= det.hard_thr and snap["alarm_level"] == 2, "Geen rood alarm!"
+    assert snap["alarm_level"] == 2, "Breed signaal gaf geen rood alarm!"
 
-    # 3) Zelfde draaggolf blijft >20 s continu aan → moet op de negeerlijst
-    feed(det, signal_frame, 60, dt=0.5, offset_hz=500_000)   # 30 s
+    # 3) Blijft >20 s continu aan → negeerlijst, alarm zakt naar 0
+    feed(det, tetra_frame, 60, dt=0.5, offset_hz=500_000)
     snap = det.snapshot()
     in_active = any(abs(f - 383.0) <= 0.0125 for f, _, _ in snap["active"])
-    print(f"[blacklist] genegeerd: {snap['blacklist']}, 383 nog actief: {in_active}, "
-          f"alarm: {snap['alarm_level']}")
-    assert snap["blacklist"] >= 1, "Constante storing niet geblacklist!"
-    assert not in_active, "Geblacklist kanaal staat nog in de actieve lijst!"
-    assert snap["alarm_level"] == 0, "Alarm blijft hangen na blacklist (latch-bug)!"
-    det.clear_blacklist()
-    assert det.blacklist_count() == 0, "Wis negeerlijst werkt niet!"
+    print(f"[blacklist] genegeerd: {snap['blacklist']}, alarm: {snap['alarm_level']}")
+    assert snap["blacklist"] >= 1 and not in_active, "Storing niet geblacklist!"
+    assert snap["alarm_level"] == 0, "Alarm blijft hangen na blacklist!"
+    det.clear_blacklist(); assert det.blacklist_count() == 0
 
-    # 4) Oversturing (clipping) → moet rood alarm forceren
+    # 4) Oversturing → rood alarm
     feed(det, clip_frame, 30, dt=0.02)
     snap = det.snapshot()
-    print(f"[overstuur] overload: {snap['overload']}, clip_peak: {snap['clip_peak']:.2f}, "
-          f"alarm: {snap['alarm_level']}")
+    print(f"[overstuur] overload: {snap['overload']}, alarm: {snap['alarm_level']}")
     assert snap["overload"] and snap["alarm_level"] == 2, "Oversturing gaf geen alarm!"
 
-    print("\n✅ Alle checks geslaagd — detectie, blacklist en oversturing werken.")
+    # 5) DC-spike op center (offset 0) → geen vals alarm op de centerfrequentie
+    det = fresh()
+    feed(det, tone_frame, 25, dt=0.05, offset_hz=0)
+    snap = det.snapshot()
+    on_center = any(abs(f - 382.5) <= 0.0125 for f, _, _ in snap["active"])
+    print(f"[dc-spike]  center actief: {on_center}, alarm: {snap['alarm_level']}")
+    assert not on_center, "DC-spike geeft vals signaal op center!"
+
+    # 6) Smalle toon (birdie) op +0.7 MHz → bezettingscheck negeert hem
+    det = fresh()
+    feed(det, tone_frame, 25, dt=0.05, offset_hz=700_000)
+    snap = det.snapshot()
+    tone_active = any(abs(f - 383.2) <= 0.02 for f, _, _ in snap["active"])
+    print(f"[birdie]    toon actief: {tone_active}, alarm: {snap['alarm_level']}")
+    assert not tone_active, "Smalle toon niet door bezettingscheck genegeerd!"
+
+    # 7) CFAR vlakt een scheve ruisvloer (unit-check op _cfar)
+    tilt = np.linspace(1.0, 50.0, 120)          # sterk oplopende ruis
+    tilt[60] = 3000.0                           # één echt signaal-kanaal
+    local = Detector._cfar(tilt)
+    snr = 10 * np.log10(tilt / local)
+    flat = np.concatenate([snr[5:55], snr[65:115]])   # alles behalve de piek
+    print(f"[cfar]      vlakke kanalen max {flat.max():.1f} dB, piek {snr[60]:.1f} dB")
+    assert flat.max() < 6.0, "CFAR maakt de scheve ruisvloer niet vlak!"
+    assert snr[60] > 15.0, "CFAR onderdrukt het echte signaal!"
+
+    print("\n✅ Alle 7 checks geslaagd — detectie, CFAR, DC-spike, bezetting,"
+          " blacklist en oversturing werken.")
 
 
 if __name__ == "__main__":

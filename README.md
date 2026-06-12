@@ -21,19 +21,45 @@ infrastructuur in de buurt.
 > luistert geen gesprekken af en leest geen data — dat is in Nederland niet
 > toegestaan en is hier ook niet nodig.
 
+## Vergelijking met bestaande tools
+
+| Tool | Platform | TETRA-activiteit | GUI/spectrum | CFAR | Auto-gain/overstuur | Negeerlijst | Decodeert |
+|---|---|---|---|---|---|---|---|
+| **TetraMonitor** | **macOS/Linux/Win** | **✅ per kanaal** | **✅** | **✅** | **✅** | **✅** | nee (bewust) |
+| SDR Power Monitor | Android | ✅ | beperkt | ✗ | ✗ | ✗ | nee |
+| JAKAMI99 detector | Linux/Pi (CLI) | ✅ uplink | ✗ | ✗ | ✗ | ✅ | nee |
+| SDRangel Freq Scanner | multi | algemeen | ✅ | ✗ | deels | ✗ | sommige modes |
+| Khanfar CFAR | Windows | algemeen | ✅ | ✅ | ✗ | ✗ | nee |
+| telive / TETRA-Kit | Linux | n.v.t. | ✅ | ✗ | ✗ | ✗ | **ja** (niet toegestaan in NL) |
+| CubicSDR / GQRX | macOS/Linux/Win | ✗ (handmatig kijken) | ✅ | ✗ | hardware-AGC | ✗ | nee |
+
+Kort: er is geen kant-en-klare **macOS-GUI** die TETRA-activiteit per kanaal
+detecteert. TetraMonitor combineert de sterke punten uit het veld — energie-
+integratie (zoals professionele sensoren), CFAR (zoals Khanfar), een negeerlijst
+(zoals JAKAMI99) en overstuur-afhandeling — zonder te decoderen.
+
 ## Hoe het werkt
 
 - De band wordt opgedeeld in kanalen van 25 kHz (het TETRA-raster). Een 4096-punts
   FFT met Blackman-venster geeft fijne resolutie (~0,8 kHz/bin) en houdt naburige
   kanalen netjes uit elkaar.
 - Per kanaal wordt de **energie over de volle 25 kHz geïntegreerd** en uitgedrukt
-  als dB boven de ruisvloer — dezelfde aanpak als professionele TETRA-sensoren,
-  robuuster dan losse pieken meten.
-- Het programma schat continu de **ruisvloer**, zodat je echte activiteit ziet in
-  plaats van ruis.
+  als dB boven de ruis — dezelfde aanpak als professionele TETRA-sensoren,
+  robuuster dan losse pieken meten. De energie wordt licht in de tijd gemiddeld
+  om ruisvariatie te onderdrukken.
+- **CFAR** (Constant False Alarm Rate): de drempel komt uit de *lokale* ruis rond
+  elk kanaal (mediaan van de buurkanalen), niet uit één globale ruisvloer. Zo past
+  hij zich aan een scheve ruisvloer aan (band-randen, helling) → minder vals alarm.
+- De **DC-spike** op de centerfrequentie (een neppiek die elke RTL-SDR heeft) wordt
+  gedempt, zodat die geen vals signaal geeft.
+- **Bezettingscheck**: een echte TETRA-draaggolf vult het kanaal breed; zit bijna
+  alle energie in één bin, dan is het een smalle storing (birdie/CW) en wordt het
+  genegeerd.
 - **Oranje** = mogelijke activiteit, **rood** = sterke, duidelijke activiteit.
 - Pijlen tonen of een signaal **sterker wordt** (▲ nadert) of **zwakker** (▼ gaat
   weg) — handig met een magneetantenne onderweg.
+
+Elke verwerkingsstap is gedekt door een offline zelftest: `python3 test_detection.py`.
 
 ## Vereisten
 

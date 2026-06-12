@@ -68,6 +68,19 @@ DEFAULT_GAIN_DB   = 40.0       # Blog V3 tuner gain; ~40 dB is een goed startpun
 NOISE_PERCENTILE  = 30         # ruisvloer (weergave) = 30e percentiel spectrum
 SOFT_THRESHOLD_DB = 12.0       # oranje: waarschijnlijk activiteit
 HARD_THRESHOLD_DB = 22.0       # rood: duidelijke, sterke activiteit
+
+# CFAR (Constant False Alarm Rate): i.p.v. één globale ruisvloer schatten we de
+# ruis LOKAAL rond elk kanaal (mediaanfilter over naburige kanalen). Zo past de
+# drempel zich aan een scheve ruisvloer aan (band-randen, helling) → minder vals
+# alarm en betere zwakke detectie.
+CFAR_HALF_CHANS   = 12         # halve venstergrootte (kanalen) voor lokale ruis
+CHAN_SMOOTH_A     = 0.20       # tijdmiddeling per kanaal (minder ruisvariantie)
+# DC-spike: de RTL-SDR heeft altijd een neppiek op de centerfrequentie (LO-lek).
+DC_NULL_BINS      = 2          # ± dit aantal bins rond center "dempen"
+# Bezetting: een echte TETRA-draaggolf vult het kanaal breed; zit bijna alle
+# energie in één bin, dan is het een smalle storing (birdie/CW) → negeren.
+OCC_PEAK_FRAC     = 0.40       # één bin > 40% van kanaalenergie = smalle piek
+                               # (gemeten: pure toon ~0.58, breed TETRA ~0.14)
 WARMUP_FRAMES     = 60         # frames om de ruisvloer op te bouwen
 HANG_TIME_S       = 4.0        # hoe lang een kanaal "actief" blijft na de piek
 TREND_HISTORY     = 12         # samples voor nadert/gaat-weg bepaling
@@ -307,7 +320,8 @@ class Detector(threading.Thread):
         self.freqs = self._calc_freqs(source.center_hz)
         self.power = np.full(FFT_SIZE, -90.0)
         self.noise_floor = -70.0           # weergave (amplitude-dB, oranje lijn)
-        self.noise_bin = 1e-7              # detectie: ruisvermogen per bin (lineair)
+        self.ch_avg = None                 # tijd-gemiddelde energie per kanaal
+        self._dc_bin = FFT_SIZE // 2       # center-bin (DC-spike) na fftshift
         self.wfall = np.full((WFALL_ROWS, FFT_SIZE), -90.0)
 
         self.soft_thr = SOFT_THRESHOLD_DB
@@ -368,7 +382,7 @@ class Detector(threading.Thread):
             self.channels.clear()
             self.n_frames = 0
             self.noise_floor = -70.0
-            self.noise_bin = 1e-7
+            self.ch_avg = None
 
     def reset_noise_floor(self):
         with self.lock:
@@ -451,6 +465,12 @@ class Detector(threading.Thread):
         samples = (iq[0::2] + 1j * iq[1::2]) * self.window
         spec = np.fft.fftshift(np.abs(np.fft.fft(samples, FFT_SIZE)))
         lin = (spec / FFT_SIZE) ** 2 + 1e-20         # lineair vermogen per bin
+        # DC-spike (LO-lek op de centerfrequentie) dempen: vervang de centerbins
+        # door de lokale mediaan, zodat hij geen vals signaal op center geeft.
+        dc = self._dc_bin
+        ref = np.concatenate([lin[dc - 9:dc - 3], lin[dc + 4:dc + 10]])
+        if ref.size:
+            lin[dc - DC_NULL_BINS:dc + DC_NULL_BINS + 1] = np.median(ref)
         power = 10.0 * np.log10(lin)                 # dB (== 20·log10(amplitude))
         now = time.time()
 
@@ -463,43 +483,60 @@ class Detector(threading.Thread):
             self.power = power
             self.n_frames += 1
 
-            # Twee ruisschatters: noise_floor (dB, voor de weergave) en noise_bin
-            # (lineair ruisvermogen per bin, voor de energie-integratie hieronder).
+            # Energie per kanaal (integratie over de volle 25 kHz).
+            ch_energy = np.array([lin[idx].sum() for _, idx in self._chan_idx])
+
+            # noise_floor (dB) is alleen voor de oranje weergavelijn.
             nf_now = float(np.percentile(power, NOISE_PERCENTILE))
-            nb_now = float(np.percentile(lin, 50))   # mediaan = robuuste ruis/bin
             if self.n_frames <= WARMUP_FRAMES:
                 a = 0.1
-                if self.n_frames == 1:
-                    self.noise_floor, self.noise_bin = nf_now, nb_now
-                else:
-                    self.noise_floor = (1 - a) * self.noise_floor + a * nf_now
-                    self.noise_bin   = (1 - a) * self.noise_bin   + a * nb_now
+                self.noise_floor = nf_now if self.n_frames == 1 else \
+                    (1 - a) * self.noise_floor + a * nf_now
+                self.ch_avg = ch_energy if self.ch_avg is None else \
+                    (1 - a) * self.ch_avg + a * ch_energy
                 self.status = f"Ruisvloer meten  {int(100 * self.n_frames / WARMUP_FRAMES)}%"
                 self.alarm_level = 0
                 return
-            # Daarna heel langzaam meedrijven (niet meespringen met activiteit).
             self.noise_floor = 0.995 * self.noise_floor + 0.005 * nf_now
-            self.noise_bin   = 0.995 * self.noise_bin   + 0.005 * nb_now
+            # Tijdmiddeling per kanaal (minder ruisvariantie → minder vals alarm).
+            self.ch_avg = (1 - CHAN_SMOOTH_A) * self.ch_avg + CHAN_SMOOTH_A * ch_energy
             self.status = "Scannen"
 
-            self._detect(lin, now)
+            # CFAR: niveau = energie t.o.v. de LOKALE ruis (mediaan van de buren).
+            local = self._cfar(self.ch_avg)
+            levels = 10.0 * np.log10(self.ch_avg / local)
+            self._detect(levels, lin, now)
 
-    def _detect(self, lin, now):
+    @staticmethod
+    def _cfar(ch_avg):
+        """Lokale ruis per kanaal via een gecentreerd mediaanfilter over de
+        naburige kanalen (robuust tegen losse sterke kanalen = OS-CFAR-achtig)."""
+        h = CFAR_HALF_CHANS
+        padded = np.pad(ch_avg, h, mode="edge")
+        win = np.lib.stride_tricks.sliding_window_view(padded, 2 * h + 1)
+        return np.median(win, axis=1)
+
+    def _detect(self, levels, lin, now):
         best_freq, best_db = 0.0, 0.0
-        nb = self.noise_bin
 
-        for cf_key, idx in self._chan_idx:
-            # Energie over het hele 25 kHz-kanaal integreren en als SNR (dB)
-            # t.o.v. de ruis uitdrukken — zoals professionele TETRA-sensoren.
-            ch_energy = float(lin[idx].sum())
-            noise_energy = nb * idx.size
-            level = 10.0 * math.log10(ch_energy / noise_energy) if noise_energy > 0 else 0.0
+        for i, (cf_key, idx) in enumerate(self._chan_idx):
+            level = float(levels[i])     # dB t.o.v. de lokale (CFAR-)ruis
             ch = self.channels.get(cf_key)
             if ch is None:
                 ch = Channel(cf_key)
                 self.channels[cf_key] = ch
             ch.history.append(level)
             if level > self.soft_thr:
+                # Bezettingscheck: zit bijna alle energie in één bin, dan is het
+                # een smalle storing (birdie/CW), geen breed TETRA-signaal.
+                seg = lin[idx]
+                seg_sum = float(seg.sum())
+                if seg_sum > 0 and float(seg.max()) / seg_sum > OCC_PEAK_FRAC:
+                    ch.active_since = 0.0          # smalle piek telt niet
+                    if now > ch.hang_until:
+                        ch.level = 0.0
+                        ch.peak *= 0.8
+                    continue
                 if ch.active_since == 0.0:
                     ch.active_since = now
                 ch.quiet_since = 0.0
