@@ -79,6 +79,20 @@ pip3 install -r requirements.txt
 python3 tetra_monitor.py
 ```
 
+### Als dubbelklikbare app (macOS)
+
+Liever zonder Terminal opstarten? Bouw één keer een `.app`:
+
+```bash
+./make_app.sh
+```
+
+Dit zet **TetraMonitor.app** in `~/Applications` (geef een andere map mee als je
+wilt, bijv. `./make_app.sh ~/Desktop`). Daarna start je 'm via Spotlight
+(⌘-spatie → "TetraMonitor"), Launchpad of door 'm naar je Dock te slepen. De app
+is een dunne wrapper die je bestaande Python gebruikt, dus na
+`pip3 install -r requirements.txt` werkt hij meteen. Logs: `~/Library/Logs/TetraMonitor.log`.
+
 Het programma start zelf `rtl_tcp`, bouwt ~15 seconden de ruisvloer op en gaat
 daarna scannen. Sluit het venster om te stoppen.
 
