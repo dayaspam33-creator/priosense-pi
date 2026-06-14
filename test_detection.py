@@ -69,6 +69,21 @@ def tone_frame(offset_hz, amp=35.0, std=6.0):
                    127.5 + amp * c.imag + np.random.normal(0, std, n))
 
 
+def multi_tetra_frame(offsets, amp=30.0, width_hz=18000.0, std=6.0):
+    """Meerdere gelijktijdige TETRA-achtige signalen (verschillende eenheden)."""
+    n = FFT_SIZE; t = np.arange(n)
+    I = np.full(n, 127.5); Q = np.full(n, 127.5)
+    w = np.fft.fftfreq(n, d=1 / SAMPLE_RATE)
+    for off in offsets:
+        sp = np.random.randn(n) + 1j * np.random.randn(n)
+        sp[np.abs(w) > width_hz / 2] = 0
+        base = np.fft.ifft(sp); base /= np.std(base.real)
+        sig = base * np.exp(2j * np.pi * off * t / SAMPLE_RATE)
+        I += amp * sig.real; Q += amp * sig.imag
+    I += np.random.normal(0, std, n); Q += np.random.normal(0, std, n)
+    return _to_raw(I, Q)
+
+
 def clip_frame(offset_hz=300_000, amp=220.0):
     n = FFT_SIZE; t = np.arange(n)
     c = np.exp(2j * np.pi * offset_hz * t / SAMPLE_RATE)
@@ -160,8 +175,19 @@ def run():
     assert snap["clip_peak"] < 0.90, "Test klipt — waas niet geïsoleerd!"
     assert snap["haze_db"] > 0 and snap["alarm_level"] == 2, "Waas gaf geen alarm!"
 
-    print("\n✅ Alle 8 checks geslaagd — detectie, CFAR, DC-spike, bezetting,"
-          " blacklist, oversturing en waas werken.")
+    # 9) Meerdere eenheden tegelijk → meerdere aparte actieve kanalen (balken)
+    det = fresh()
+    offs = [-700_000, -200_000, 400_000, 900_000]   # 4 eenheden op eigen kanalen
+    feed(det, multi_tetra_frame, 25, dt=0.05, offsets=offs)
+    snap = det.snapshot()
+    freqs = sorted(f for f, _, _ in snap["active"])
+    print(f"[multi]     {len(snap['active'])} eenheden actief: "
+          f"{', '.join(f'{f:.3f}' for f in freqs)}")
+    assert len(snap["active"]) >= 4, \
+        f"Maar {len(snap['active'])} eenheden zichtbaar i.p.v. 4!"
+
+    print("\n✅ Alle 9 checks geslaagd — detectie, CFAR, DC-spike, bezetting,"
+          " blacklist, oversturing, waas en meerdere eenheden werken.")
 
 
 if __name__ == "__main__":

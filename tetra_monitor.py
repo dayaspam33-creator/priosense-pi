@@ -724,19 +724,22 @@ class StatusBanner(QFrame):
 
 # ── Kanaalbalken ────────────────────────────────────────────────────────────
 class ChannelBars(QWidget):
-    """Top-actieve kanalen als verticale balken met richting-indicator."""
-    N_BARS = 5
+    """Top-actieve kanalen als verticale balken met richting-indicator.
+    Elke balk = één zendende eenheid (voertuig/portofoon) op z'n eigen kanaal."""
+    N_BARS = 6
     N_SEG = 12
 
     def __init__(self):
         super().__init__()
         self._active = []
+        self._total = 0
         self._soft = SOFT_THRESHOLD_DB
         self._hard = HARD_THRESHOLD_DB
         self.setMinimumHeight(220)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
     def update_data(self, active, soft, hard):
+        self._total = len(active)               # totaal aantal actieve eenheden
         self._active = active[:self.N_BARS]
         self._soft, self._hard = soft, hard
         self.update()
@@ -747,8 +750,16 @@ class ChannelBars(QWidget):
         W, H = self.width(), self.height()
         p.fillRect(0, 0, W, H, qc("panel"))
 
-        p.setFont(sys_font(9, bold=True)); p.setPen(qc("gray2"))
-        p.drawText(0, 0, W, 24, int(Qt.AlignmentFlag.AlignCenter), "ACTIEVE KANALEN")
+        p.setFont(sys_font(9, bold=True))
+        if self._total > 0:
+            p.setPen(qc("green") if self._total else qc("gray2"))
+            title = f"ACTIEVE EENHEDEN · {self._total}"
+            if self._total > self.N_BARS:
+                title += f"  (top {self.N_BARS})"
+        else:
+            p.setPen(qc("gray2"))
+            title = "ACTIEVE EENHEDEN"
+        p.drawText(0, 0, W, 24, int(Qt.AlignmentFlag.AlignCenter), title)
 
         top = 30
         label_h = 54
