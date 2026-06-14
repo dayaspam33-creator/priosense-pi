@@ -186,8 +186,19 @@ def run():
     assert len(snap["active"]) >= 4, \
         f"Maar {len(snap['active'])} eenheden zichtbaar i.p.v. 4!"
 
-    print("\n✅ Alle 9 checks geslaagd — detectie, CFAR, DC-spike, bezetting,"
-          " blacklist, oversturing, waas en meerdere eenheden werken.")
+    # 10) Korte registratiepuls (burst) → piek-hold houdt 'm vast, ook nadat de
+    #     burst allang voorbij is (passerend voertuig dat niet praat).
+    det = fresh()
+    feed(det, noise_frame, 5, dt=0.02)
+    feed(det, tetra_frame, 3, dt=0.02, offset_hz=-400_000)   # korte burst op 382.1
+    feed(det, noise_frame, 40, dt=0.02)                      # burst voorbij
+    snap = det.snapshot()
+    held = any(abs(f - 382.1) <= 0.0125 for f, _, _ in snap["active"])
+    print(f"[burst]     puls op 382.1 nog vastgehouden: {held}, alarm: {snap['alarm_level']}")
+    assert held, "Korte burst niet vastgehouden door piek-hold!"
+
+    print("\n✅ Alle 10 checks geslaagd — detectie, CFAR, DC-spike, bezetting,"
+          " blacklist, oversturing, waas, meerdere eenheden en burst-puls werken.")
 
 
 if __name__ == "__main__":

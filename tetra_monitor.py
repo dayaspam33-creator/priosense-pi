@@ -77,6 +77,10 @@ HARD_THRESHOLD_DB = 22.0       # rood: duidelijke, sterke activiteit
 # alarm en betere zwakke detectie.
 CFAR_HALF_CHANS   = 12         # halve venstergrootte (kanalen) voor lokale ruis
 CHAN_SMOOTH_A     = 0.20       # tijdmiddeling per kanaal (minder ruisvariantie)
+# Piek-hold (burst-detectie): vangt korte registratiepulsjes van passerende
+# voertuigen. Per frame zakt de piek met deze factor → een sterke burst blijft
+# ~1–3 s zichtbaar, ook al duurde hij maar milliseconden.
+PEAK_DECAY        = 0.998
 # DC-spike: de RTL-SDR heeft altijd een neppiek op de centerfrequentie (LO-lek).
 DC_NULL_BINS      = 2          # ± dit aantal bins rond center "dempen"
 # Bezetting: een echte TETRA-draaggolf vult het kanaal breed; zit bijna alle
@@ -330,6 +334,7 @@ class Detector(threading.Thread):
         self.power = np.full(FFT_SIZE, -90.0)
         self.noise_floor = -70.0           # weergave (amplitude-dB, oranje lijn)
         self.ch_avg = None                 # tijd-gemiddelde energie per kanaal
+        self.ch_peak = None                # piek-hold per kanaal (burst-detectie)
         self._dc_bin = FFT_SIZE // 2       # center-bin (DC-spike) na fftshift
         self.wfall = np.full((WFALL_ROWS, FFT_SIZE), -90.0)
 
@@ -395,6 +400,7 @@ class Detector(threading.Thread):
             self.n_frames = 0
             self.noise_floor = -70.0
             self.ch_avg = None
+            self.ch_peak = None
             self.floor_baseline = None
             self.haze = False
 
@@ -508,6 +514,8 @@ class Detector(threading.Thread):
                     (1 - a) * self.noise_floor + a * nf_now
                 self.ch_avg = ch_energy if self.ch_avg is None else \
                     (1 - a) * self.ch_avg + a * ch_energy
+                self.ch_peak = ch_energy.copy() if self.ch_peak is None else \
+                    np.maximum(ch_energy, self.ch_peak)
                 self.floor_baseline = self.noise_floor
                 self.status = f"Ruisvloer meten  {int(100 * self.n_frames / WARMUP_FRAMES)}%"
                 self.alarm_level = 0
@@ -524,11 +532,19 @@ class Detector(threading.Thread):
             self.haze = self.haze_db > HAZE_RISE_DB
             # Tijdmiddeling per kanaal (minder ruisvariantie → minder vals alarm).
             self.ch_avg = (1 - CHAN_SMOOTH_A) * self.ch_avg + CHAN_SMOOTH_A * ch_energy
+            # Piek-hold per kanaal: vangt korte registratiepulsjes (passerend
+            # voertuig dat niet praat) en houdt ze even vast, zodat een burst van
+            # ~14 ms niet tussen twee schermverversingen wegvalt.
+            self.ch_peak = np.maximum(ch_energy, self.ch_peak * PEAK_DECAY)
             self.status = "Scannen"
 
-            # CFAR: niveau = energie t.o.v. de LOKALE ruis (mediaan van de buren).
+            # CFAR: lokale ruis uit de stabiele gemiddelde energie (mediaan buren).
             local = self._cfar(self.ch_avg)
-            levels = 10.0 * np.log10(self.ch_avg / local)
+            # Detectieniveau = het hoogste van: langere transmissie (gemiddelde) en
+            # korte burst (piek). Zo zien we beide.
+            level_avg = 10.0 * np.log10(self.ch_avg / local)
+            level_peak = 10.0 * np.log10(self.ch_peak / local)
+            levels = np.maximum(level_avg, level_peak)
             self._detect(levels, lin, now)
 
     @staticmethod

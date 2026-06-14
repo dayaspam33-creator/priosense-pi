@@ -47,6 +47,11 @@ integratie (zoals professionele sensoren), CFAR (zoals Khanfar), een negeerlijst
   als dB boven de ruis — dezelfde aanpak als professionele TETRA-sensoren,
   robuuster dan losse pieken meten. De energie wordt licht in de tijd gemiddeld
   om ruisvariatie te onderdrukken.
+- **Burst-/piekdetectie:** naast die middeling houdt een *piek-hold* per kanaal
+  korte pulsjes vast. Zo zie je ook **passerende voertuigen** die zelf even bij
+  het netwerk registreren (een burst van ~14 ms) — niet alleen langere
+  transmissies. Een sterke burst blijft ~1–3 s zichtbaar in plaats van weg te
+  vallen tussen twee schermverversingen.
 - **CFAR** (Constant False Alarm Rate): de drempel komt uit de *lokale* ruis rond
   elk kanaal (mediaan van de buurkanalen), niet uit één globale ruisvloer. Zo past
   hij zich aan een scheve ruisvloer aan (band-randen, helling) → minder vals alarm.
