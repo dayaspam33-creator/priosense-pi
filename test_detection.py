@@ -150,8 +150,18 @@ def run():
     assert flat.max() < 6.0, "CFAR maakt de scheve ruisvloer niet vlak!"
     assert snr[60] > 15.0, "CFAR onderdrukt het echte signaal!"
 
-    print("\n✅ Alle 7 checks geslaagd — detectie, CFAR, DC-spike, bezetting,"
-          " blacklist en oversturing werken.")
+    # 8) "Waas": hele ruisvloer tilt op (zender vlakbij, geen harde clipping) →
+    #    moet rood alarm geven, ook al steekt geen enkel kanaal er relatief uit.
+    det = fresh()                                  # baseline op stille ruis
+    feed(det, noise_frame, 600, dt=0.01, std=24.0) # ~+12 dB vloer, geen clip
+    snap = det.snapshot()
+    print(f"[waas]      vloer +{snap['haze_db']:.0f} dB, clip {snap['clip_peak']:.2f}, "
+          f"alarm: {snap['alarm_level']}")
+    assert snap["clip_peak"] < 0.90, "Test klipt — waas niet geïsoleerd!"
+    assert snap["haze_db"] > 0 and snap["alarm_level"] == 2, "Waas gaf geen alarm!"
+
+    print("\n✅ Alle 8 checks geslaagd — detectie, CFAR, DC-spike, bezetting,"
+          " blacklist, oversturing en waas werken.")
 
 
 if __name__ == "__main__":

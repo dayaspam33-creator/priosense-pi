@@ -95,6 +95,13 @@ UNBLACKLIST_QUIET_S = 15.0     # zo lang stil → weer meedoen
 # en valt de meting weg. Dat herkennen we aan de piek van de ruwe IQ-samples en
 # behandelen we als "zeer sterk signaal dichtbij" → direct rood alarm.
 OVERLOAD_CLIP     = 0.90       # gemiddelde clip-piek hierboven = oversturing
+# "Waas": een zender vlakbij kan de front-end desensitiseren zonder dat de ADC
+# hard klipt — de HELE ruisvloer tilt dan gelijkmatig omhoog (oranje waas over de
+# waterfall). CFAR is relatief en ziet dat niet, dus meten we de absolute stijging
+# van de ruisvloer t.o.v. de "normale" (stille) vloer.
+HAZE_RISE_DB      = 10.0       # ruisvloer zoveel dB boven normaal = sterk-signaal
+FLOOR_BASE_UP     = 0.00002    # baseline stijgt heel traag (~1 min) maar zakt snel,
+                               # zodat een aanhoudende waas alarm blijft geven
 LOG_COOLDOWN_S    = 10.0       # min. tijd tussen logregels per kanaal
 SIREN_COOLDOWN_S  = 10.0
 
@@ -334,7 +341,10 @@ class Detector(threading.Thread):
         self.agc_max = source.gain_db
         self.clip_peak = 0.0           # 1.0 = tegen clipping aan (per frame)
         self.clip_avg = 0.2            # gladgestreken clip-piek (voor oversturing)
-        self.overload = False          # front-end overstuur (zender zeer dichtbij)
+        self.overload = False          # front-end overstuur via harde clipping
+        self.floor_baseline = None     # geleerde "normale" (stille) ruisvloer
+        self.haze = False              # brede oversturing (ruisvloer opgetild)
+        self.haze_db = 0.0             # hoeveel dB de vloer boven normaal staat
         self._agc_last = 0.0
 
         self.auto_blacklist = True     # constante storingskanalen negeren
@@ -383,6 +393,8 @@ class Detector(threading.Thread):
             self.n_frames = 0
             self.noise_floor = -70.0
             self.ch_avg = None
+            self.floor_baseline = None
+            self.haze = False
 
     def reset_noise_floor(self):
         with self.lock:
@@ -430,12 +442,12 @@ class Detector(threading.Thread):
             self.src.apply_gain()
             self._agc_last = now
             self.n_frames = 0                     # ruisvloer opnieuw inregelen
-        elif peak > 0.95 and g > 0:               # oversturing → omlaag
+        elif (peak > 0.95 or self.haze) and g > 0:  # oversturing of brede waas → omlaag
             self.src.gain_db = max(0.0, g - 3.0)
             self.src.apply_gain()
             self._agc_last = now
             self.n_frames = 0
-        elif peak < 0.5 and g < self.agc_max:     # ruim onder → langzaam omhoog
+        elif peak < 0.5 and not self.haze and g < self.agc_max:  # ruim onder → omhoog
             self.src.gain_db = min(self.agc_max, g + 1.0)
             self.src.apply_gain()
             self._agc_last = now
@@ -494,10 +506,20 @@ class Detector(threading.Thread):
                     (1 - a) * self.noise_floor + a * nf_now
                 self.ch_avg = ch_energy if self.ch_avg is None else \
                     (1 - a) * self.ch_avg + a * ch_energy
+                self.floor_baseline = self.noise_floor
                 self.status = f"Ruisvloer meten  {int(100 * self.n_frames / WARMUP_FRAMES)}%"
                 self.alarm_level = 0
                 return
             self.noise_floor = 0.995 * self.noise_floor + 0.005 * nf_now
+            # "Waas"-detectie: baseline volgt de stille vloer snel omlaag, maar
+            # heel langzaam omhoog. Tilt de hele vloer plots op (zender vlakbij),
+            # dan blijft de baseline laag en onthult het gat de oversturing.
+            if self.noise_floor < self.floor_baseline:
+                self.floor_baseline = self.noise_floor
+            else:
+                self.floor_baseline += FLOOR_BASE_UP * (self.noise_floor - self.floor_baseline)
+            self.haze_db = self.noise_floor - self.floor_baseline
+            self.haze = self.haze_db > HAZE_RISE_DB
             # Tijdmiddeling per kanaal (minder ruisvariantie → minder vals alarm).
             self.ch_avg = (1 - CHAN_SMOOTH_A) * self.ch_avg + CHAN_SMOOTH_A * ch_energy
             self.status = "Scannen"
@@ -563,9 +585,10 @@ class Detector(threading.Thread):
                     ch.level = 0.0
                     ch.peak *= 0.8
 
-        # Alarmniveau bepalen. Oversturing eerst: als de dongle overstuurt staat
-        # er iets zeer sterks vlakbij — dan juist rood alarm i.p.v. stil vallen.
-        if self.overload:
+        # Alarmniveau bepalen. Oversturing/waas eerst: staat er iets zeer sterks
+        # vlakbij (harde clipping óf opgetilde ruisvloer), dan juist rood alarm
+        # i.p.v. stil vallen — precies de situatie vóór een politiebureau.
+        if self.overload or self.haze:
             lvl, afreq, adb = 2, best_freq, max(best_db, self.hard_thr)
             self._alarm_until = now + 2.0
         elif best_db >= self.hard_thr:
@@ -625,7 +648,8 @@ class Detector(threading.Thread):
                 "gain": self.src.gain_db,
                 "clip_peak": self.clip_peak,
                 "agc": self.auto_gain_reduction,
-                "overload": self.overload,
+                "overload": self.overload or self.haze,
+                "haze_db": self.haze_db if self.haze else 0.0,
                 "blacklist": sum(1 for ch in self.channels.values() if ch.blacklisted),
             }
 
@@ -1103,7 +1127,9 @@ class MainWindow(QMainWindow):
         if snap["agc"] and abs(snap["gain"] - self.sl_gain.value()) >= 0.5:
             self.sl_gain.set_value(snap["gain"])
         extra = ""
-        if snap["overload"]:
+        if snap["haze_db"] > 0:
+            extra = f"   ·   ⚠ OVERSTUUR (vloer +{snap['haze_db']:.0f} dB)"
+        elif snap["overload"]:
             extra = "   ·   ⚠ OVERSTUUR"
         elif snap["agc"]:
             extra = f"   ·   gain {snap['gain']:.0f} dB (auto)"

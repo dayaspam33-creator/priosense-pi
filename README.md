@@ -133,16 +133,25 @@ bewaard en bij de volgende start weer geladen.
 
 ## Zeer dichtbij een zender (bijv. een politieauto naast je)
 
-Als een zender vlak naast je staat, is het signaal zó sterk dat de dongle
-**overstuurt** (clipping). Het hele spectrum vervuilt en de nette piek valt weg —
-zonder maatregel zou de monitor juist stil vallen. TetraMonitor lost dit op twee
-manieren op:
+Als een zender vlak naast je staat (bijv. vóór een politiebureau), is het signaal
+zó sterk dat de dongle **overstuurt**. Dat kan op twee manieren:
 
-- **Oversturing = direct rood alarm.** Herkent hij clipping, dan toont het banner
-  "🚨 ZEER STERK SIGNAAL DICHTBIJ" en gaat het alarm af — precies wanneer er iets
-  vlakbij zendt.
-- **Auto gain-reductie** draait de gain dan snel omlaag, zodat de meting óók van
-  dichtbij blijft werken; rij je weg, dan klimt de gain vanzelf terug.
+1. **Harde clipping** — de samples lopen tegen het maximum (0/255).
+2. **Brede "waas"** — de front-end raakt verzadigd zonder hard te clippen; de hele
+   ruisvloer tilt gelijkmatig omhoog (een oranje waas over de waterfall). Omdat de
+   CFAR-detectie *relatief* is, ziet die zo'n vlakke optilling niet → zonder
+   maatregel zou de monitor juist stil blijven, precies wat je niet wilt.
+
+TetraMonitor vangt beide op:
+
+- **Oversturing/waas = direct rood alarm.** Bij clipping óf een opgetilde ruisvloer
+  toont het banner "🚨 ZEER STERK SIGNAAL DICHTBIJ" en gaat het alarm af. De
+  statusregel laat zien hoeveel de vloer is opgetild ("OVERSTUUR (vloer +X dB)").
+- **Auto gain-reductie** draait de gain dan omlaag, zodat de waas verdwijnt en de
+  meting óók van dichtbij weer werkt; rij je weg, dan klimt de gain vanzelf terug.
+
+> Start de app bij voorkeur op een rustige plek, niet ál vlak vóór het bureau —
+> dan leert hij de normale ruisvloer en herkent hij de optilling daarna goed.
 
 ## Auto-negeerlijst (blacklist)
 
