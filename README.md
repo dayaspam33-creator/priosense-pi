@@ -114,7 +114,8 @@ De band is breder dan wat de dongle in één keer ziet (~3.2 MHz). Met de
 ## Afstellen
 
 - **Gain** te hoog → veel ruis en valse activiteit; te laag → je mist zwakke
-  signalen. Begin bij 40 dB en stel bij.
+  signalen. Standaard 36 dB (bewust iets lager voor een resonante antenne dicht
+  bij sterke zenders); stel bij naar smaak.
 - **Gain-modus** (dropdown):
   - *Handmatig* — je stelt de gain zelf in met de schuif.
   - *Auto-reductie* — bij oversturing (clipping) draait hij de gain automatisch

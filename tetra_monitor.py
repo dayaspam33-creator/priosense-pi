@@ -64,7 +64,9 @@ WFALL_ROWS    = 120
 
 # Detectie: per kanaal integreren we de energie over de volle 25 kHz (zoals
 # professionele TETRA-sensoren) en drukken die uit als dB boven de ruisvloer.
-DEFAULT_GAIN_DB   = 40.0       # Blog V3 tuner gain; ~40 dB is een goed startpunt
+DEFAULT_GAIN_DB   = 36.0       # Blog V3 + resonante TETRA-antenne in een actieve
+                               # RF-omgeving: iets lager startpunt = minder kans op
+                               # verzadiging vlakbij zenders (auto-reductie regelt bij)
 NOISE_PERCENTILE  = 30         # ruisvloer (weergave) = 30e percentiel spectrum
 SOFT_THRESHOLD_DB = 12.0       # oranje: waarschijnlijk activiteit
 HARD_THRESHOLD_DB = 22.0       # rood: duidelijke, sterke activiteit
