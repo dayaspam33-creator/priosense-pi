@@ -78,9 +78,10 @@ HARD_THRESHOLD_DB = 22.0       # rood: duidelijke, sterke activiteit
 CFAR_HALF_CHANS   = 12         # halve venstergrootte (kanalen) voor lokale ruis
 CHAN_SMOOTH_A     = 0.20       # tijdmiddeling per kanaal (minder ruisvariantie)
 # Piek-hold (burst-detectie): vangt korte registratiepulsjes van passerende
-# voertuigen. Per frame zakt de piek met deze factor → een sterke burst blijft
-# ~1–3 s zichtbaar, ook al duurde hij maar milliseconden.
-PEAK_DECAY        = 0.998
+# voertuigen, zodat een puls van ~14 ms de drempel even haalt. Tijd-gebaseerde
+# decay (tijdconstante in seconden) → framerate-onafhankelijk. De zichtbare
+# persistentie regelt de hold/release hierboven; deze hold is kort.
+PEAK_TAU          = 0.3        # s — hoe lang de detectiepiek nadreunt
 # DC-spike: de RTL-SDR heeft altijd een neppiek op de centerfrequentie (LO-lek).
 DC_NULL_BINS      = 2          # ± dit aantal bins rond center "dempen"
 # Bezetting: een echte TETRA-draaggolf vult het kanaal breed; zit bijna alle
@@ -88,7 +89,8 @@ DC_NULL_BINS      = 2          # ± dit aantal bins rond center "dempen"
 OCC_PEAK_FRAC     = 0.40       # één bin > 40% van kanaalenergie = smalle piek
                                # (gemeten: pure toon ~0.58, breed TETRA ~0.14)
 WARMUP_FRAMES     = 60         # frames om de ruisvloer op te bouwen
-HANG_TIME_S       = 4.0        # hoe lang een kanaal "actief" blijft na de piek
+HANG_TIME_S       = 4.0        # balk blijft staan (HOLD) na het laatste contact
+RELEASE_DB_S      = 12.0       # daarna zakt de balk geleidelijk (dB per seconde)
 TREND_HISTORY     = 12         # samples voor nadert/gaat-weg bepaling
 
 # Auto-blacklist: een kanaal dat heel lang ononderbroken "actief" is, is bijna
@@ -363,6 +365,7 @@ class Detector(threading.Thread):
         self.alarm_db = 0.0
         self._alarm_until = 0.0
         self._prev_level = 0       # voor flank-detectie (geschiedenis/sirene)
+        self._last_t = None        # vorige frame-tijd (voor release-snelheid)
 
         self._last_log = {}
         self._last_siren = 0.0
@@ -530,12 +533,15 @@ class Detector(threading.Thread):
                 self.floor_baseline += FLOOR_BASE_UP * (self.noise_floor - self.floor_baseline)
             self.haze_db = self.noise_floor - self.floor_baseline
             self.haze = self.haze_db > HAZE_RISE_DB
+            # Tijd sinds vorige frame (voor framerate-onafhankelijke ballistiek).
+            dt = 0.0 if self._last_t is None else min(0.5, now - self._last_t)
+            self._last_t = now
+
             # Tijdmiddeling per kanaal (minder ruisvariantie → minder vals alarm).
             self.ch_avg = (1 - CHAN_SMOOTH_A) * self.ch_avg + CHAN_SMOOTH_A * ch_energy
             # Piek-hold per kanaal: vangt korte registratiepulsjes (passerend
-            # voertuig dat niet praat) en houdt ze even vast, zodat een burst van
-            # ~14 ms niet tussen twee schermverversingen wegvalt.
-            self.ch_peak = np.maximum(ch_energy, self.ch_peak * PEAK_DECAY)
+            # voertuig dat niet praat), zodat een burst van ~14 ms de drempel haalt.
+            self.ch_peak = np.maximum(ch_energy, self.ch_peak * math.exp(-dt / PEAK_TAU))
             self.status = "Scannen"
 
             # CFAR: lokale ruis uit de stabiele gemiddelde energie (mediaan buren).
@@ -545,7 +551,7 @@ class Detector(threading.Thread):
             level_avg = 10.0 * np.log10(self.ch_avg / local)
             level_peak = 10.0 * np.log10(self.ch_peak / local)
             levels = np.maximum(level_avg, level_peak)
-            self._detect(levels, lin, now)
+            self._detect(levels, lin, now, dt)
 
     @staticmethod
     def _cfar(ch_avg):
@@ -556,7 +562,7 @@ class Detector(threading.Thread):
         win = np.lib.stride_tricks.sliding_window_view(padded, 2 * h + 1)
         return np.median(win, axis=1)
 
-    def _detect(self, levels, lin, now):
+    def _detect(self, levels, lin, now, dt):
         best_freq, best_db = 0.0, 0.0
 
         for i, (cf_key, idx) in enumerate(self._chan_idx):
@@ -566,42 +572,49 @@ class Detector(threading.Thread):
                 ch = Channel(cf_key)
                 self.channels[cf_key] = ch
             ch.history.append(level)
+
+            contact = False
             if level > self.soft_thr:
                 # Bezettingscheck: zit bijna alle energie in één bin, dan is het
                 # een smalle storing (birdie/CW), geen breed TETRA-signaal.
                 seg = lin[idx]
                 seg_sum = float(seg.sum())
-                if seg_sum > 0 and float(seg.max()) / seg_sum > OCC_PEAK_FRAC:
-                    ch.active_since = 0.0          # smalle piek telt niet
-                    if now > ch.hang_until:
-                        ch.level = 0.0
-                        ch.peak *= 0.8
-                    continue
-                if ch.active_since == 0.0:
-                    ch.active_since = now
-                ch.quiet_since = 0.0
-                # Te lang ononderbroken actief = constante storing → blacklist.
-                if (self.auto_blacklist and not ch.blacklisted
-                        and now - ch.active_since > BLACKLIST_SECONDS):
-                    ch.blacklisted = True
-                if ch.blacklisted:
-                    ch.level = 0.0                 # genegeerd: niet tonen/alarmeren
+                is_spike = seg_sum > 0 and float(seg.max()) / seg_sum > OCC_PEAK_FRAC
+                if is_spike:
+                    ch.active_since = 0.0          # smalle piek telt niet als contact
                 else:
-                    ch.level = level
-                    ch.peak = max(ch.peak * 0.9, level)
-                    ch.hang_until = now + HANG_TIME_S
-                    if level > best_db:
-                        best_db, best_freq = level, cf_key
-                    self._log(cf_key, level)
+                    if ch.active_since == 0.0:
+                        ch.active_since = now
+                    ch.quiet_since = 0.0
+                    # Te lang ononderbroken actief = constante storing → blacklist.
+                    if (self.auto_blacklist and not ch.blacklisted
+                            and now - ch.active_since > BLACKLIST_SECONDS):
+                        ch.blacklisted = True
+                    contact = not ch.blacklisted
             else:
                 ch.active_since = 0.0
                 if ch.quiet_since == 0.0:
                     ch.quiet_since = now
                 if ch.blacklisted and now - ch.quiet_since > UNBLACKLIST_QUIET_S:
                     ch.blacklisted = False
-                if now > ch.hang_until:
-                    ch.level = 0.0
-                    ch.peak *= 0.8
+
+            # Balk-ballistiek (piek-meter): bij contact springt de balk naar de
+            # piek (attack) en houdt die HANG_TIME_S vast (hold); daarna zakt hij
+            # geleidelijk (release). Nieuw contact zet 'm meteen weer vol → de
+            # balk blijft staan tussen pulsjes door i.p.v. te flikkeren.
+            if contact:
+                if level > ch.level:
+                    ch.level = level                # attack: naar de piek
+                ch.hang_until = now + HANG_TIME_S
+                if level > best_db:
+                    best_db, best_freq = level, cf_key
+                self._log(cf_key, level)
+            elif ch.blacklisted:
+                ch.level = 0.0
+            elif now <= ch.hang_until:
+                pass                                # HOLD: piek blijft staan
+            elif ch.level > 0.0:
+                ch.level = max(0.0, ch.level - RELEASE_DB_S * dt)   # RELEASE
 
         # Alarmniveau bepalen. Oversturing/waas eerst: staat er iets zeer sterks
         # vlakbij (harde clipping óf opgetilde ruisvloer), dan juist rood alarm

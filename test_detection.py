@@ -197,8 +197,22 @@ def run():
     print(f"[burst]     puls op 382.1 nog vastgehouden: {held}, alarm: {snap['alarm_level']}")
     assert held, "Korte burst niet vastgehouden door piek-hold!"
 
-    print("\n✅ Alle 10 checks geslaagd — detectie, CFAR, DC-spike, bezetting,"
-          " blacklist, oversturing, waas, meerdere eenheden en burst-puls werken.")
+    # 11) Balk-ballistiek: na contact blijft de balk binnen de holdtijd staan en
+    #     is daarna (hold + release) weer weg — niet meteen uit, niet eeuwig aan.
+    def _lvl(s, f0=383.0):
+        return next((l for f, l, _ in s["active"] if abs(f - f0) <= 0.0125), 0.0)
+    det = fresh()
+    feed(det, tetra_frame, 10, dt=0.02, offset_hz=500_000)   # contact op 383.0
+    feed(det, noise_frame, 100, dt=0.02)                     # 2 s ruis (binnen hold 4 s)
+    held_lvl = _lvl(det.snapshot())
+    feed(det, noise_frame, 350, dt=0.02)                     # +7 s ruis (voorbij hold+release)
+    gone_lvl = _lvl(det.snapshot())
+    print(f"[ballistiek] binnen hold: {held_lvl:.0f} dB, na hold+release: {gone_lvl:.0f} dB")
+    assert held_lvl > 20, "Balk hield niet op de piek binnen de holdtijd!"
+    assert gone_lvl == 0, "Balk ging niet uit na hold+release!"
+
+    print("\n✅ Alle 11 checks geslaagd — detectie, CFAR, DC-spike, bezetting, blacklist,"
+          " oversturing, waas, meerdere eenheden, burst-puls en balk-ballistiek werken.")
 
 
 if __name__ == "__main__":
