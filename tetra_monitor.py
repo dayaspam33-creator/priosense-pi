@@ -753,10 +753,10 @@ class StatusBanner(QFrame):
 
 # ── Kanaalbalken ────────────────────────────────────────────────────────────
 class ChannelBars(QWidget):
-    """Top-actieve kanalen als verticale balken met richting-indicator.
+    """Top-actieve kanalen als grote verticale balken met richting-indicator.
     Elke balk = één zendende eenheid (voertuig/portofoon) op z'n eigen kanaal."""
-    N_BARS = 6
-    N_SEG = 12
+    N_BARS = 3
+    N_SEG = 14
 
     def __init__(self):
         super().__init__()
@@ -764,7 +764,7 @@ class ChannelBars(QWidget):
         self._total = 0
         self._soft = SOFT_THRESHOLD_DB
         self._hard = HARD_THRESHOLD_DB
-        self.setMinimumHeight(220)
+        self.setMinimumHeight(200)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
     def update_data(self, active, soft, hard):
@@ -779,28 +779,33 @@ class ChannelBars(QWidget):
         W, H = self.width(), self.height()
         p.fillRect(0, 0, W, H, qc("panel"))
 
-        p.setFont(sys_font(9, bold=True))
+        p.setFont(sys_font(12, bold=True))
         if self._total > 0:
-            p.setPen(qc("green") if self._total else qc("gray2"))
+            p.setPen(qc("green"))
             title = f"ACTIEVE EENHEDEN · {self._total}"
             if self._total > self.N_BARS:
-                title += f"  (top {self.N_BARS})"
+                title += f"  (sterkste {self.N_BARS})"
         else:
             p.setPen(qc("gray2"))
             title = "ACTIEVE EENHEDEN"
-        p.drawText(0, 0, W, 24, int(Qt.AlignmentFlag.AlignCenter), title)
+        p.drawText(0, 4, W, 28, int(Qt.AlignmentFlag.AlignCenter), title)
 
-        top = 30
-        label_h = 54
+        top = 38
+        label_h = 76
         bars_h = H - top - label_h
-        seg_gap = 3
+        seg_gap = 4
         sect_w = W / self.N_BARS
-        seg_w = sect_w * 0.5
+        seg_w = sect_w * 0.42
         seg_h = (bars_h - (self.N_SEG - 1) * seg_gap) / self.N_SEG
         full = max(1.0, self._hard + 6.0)   # dB-schaal voor volle balk
 
-        on = ([qc("green")] * 5 + [qc("yellow")] * 4 + [qc("red")] * 3)
-        off = ([QColor("#10261a")] * 5 + [QColor("#26220c")] * 4 + [QColor("#2a1010")] * 3)
+        # Kleuren naar verhouding van het aantal segmenten (groen-geel-rood).
+        n_green = round(self.N_SEG * 0.42)
+        n_yellow = round(self.N_SEG * 0.33)
+        n_red = self.N_SEG - n_green - n_yellow
+        on = [qc("green")] * n_green + [qc("yellow")] * n_yellow + [qc("red")] * n_red
+        off = ([QColor("#10261a")] * n_green + [QColor("#26220c")] * n_yellow
+               + [QColor("#2a1010")] * n_red)
 
         for i in range(self.N_BARS):
             cx = sect_w * i + sect_w / 2
@@ -819,23 +824,25 @@ class ChannelBars(QWidget):
                 path = QPainterPath(); path.addRoundedRect(rect, 3, 3)
                 p.fillPath(path, on[li] if li < n_lit else off[li])
 
-            ly = H - label_h + 4
+            lx = int(cx - sect_w / 2)
+            lw = int(sect_w)
+            ly = H - label_h + 6
             if freq is not None:
-                p.setFont(sys_font(8, bold=True)); p.setPen(col)
-                p.drawText(int(cx - sect_w / 2), ly, int(sect_w), 16,
-                           int(Qt.AlignmentFlag.AlignCenter), f"{freq:.3f}")
-                p.setFont(sys_font(8)); p.setPen(qc("gray1"))
-                p.drawText(int(cx - sect_w / 2), ly + 16, int(sect_w), 16,
+                p.setFont(sys_font(15, bold=True)); p.setPen(col)
+                p.drawText(lx, ly, lw, 26,
+                           int(Qt.AlignmentFlag.AlignCenter), f"{freq:.3f} MHz")
+                p.setFont(sys_font(13, bold=True)); p.setPen(qc("gray1"))
+                p.drawText(lx, ly + 26, lw, 22,
                            int(Qt.AlignmentFlag.AlignCenter), f"+{level:.0f} dB")
                 arrow, ac = (("▲ nadert", qc("green")) if trend == 1 else
                              ("▼ gaat weg", qc("orange")) if trend == -1 else
                              ("► stabiel", qc("gray2")))
-                p.setFont(sys_font(8, bold=True)); p.setPen(ac)
-                p.drawText(int(cx - sect_w / 2), ly + 33, int(sect_w), 16,
+                p.setFont(sys_font(12, bold=True)); p.setPen(ac)
+                p.drawText(lx, ly + 49, lw, 22,
                            int(Qt.AlignmentFlag.AlignCenter), arrow)
             else:
-                p.setFont(sys_font(11, bold=True)); p.setPen(qc("gray3"))
-                p.drawText(int(cx - sect_w / 2), ly, int(sect_w), 20,
+                p.setFont(sys_font(16, bold=True)); p.setPen(qc("gray3"))
+                p.drawText(lx, ly, lw, 28,
                            int(Qt.AlignmentFlag.AlignCenter), "—")
         p.end()
 
@@ -992,16 +999,18 @@ class MainWindow(QMainWindow):
         self.wfall.addItem(self.img)
         self._apply_wfall_transform()
         left.addWidget(self.wfall, stretch=2)
+
+        # Grote balken direct onder de waterfall (volle breedte linkerkolom).
+        self.bars = ChannelBars()
+        left.addWidget(self.bars, stretch=3)
         body.addLayout(left, stretch=3)
 
-        # Rechterkolom: kanaalbalken, geschiedenis, regelaars
+        # Rechterkolom: geschiedenis, regelaars
         right = QVBoxLayout(); right.setSpacing(8)
         right.setContentsMargins(0, 0, 0, 0)
         rw = QWidget(); rw.setFixedWidth(300)
         rw.setLayout(right)
 
-        self.bars = ChannelBars()
-        right.addWidget(self.bars)
         self.history = HistoryList()
         right.addWidget(self.history, stretch=1)
 
