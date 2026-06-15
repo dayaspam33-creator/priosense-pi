@@ -132,6 +132,11 @@ De band is breder dan wat de dongle in één keer ziet (~3.2 MHz). Met de
   je dicht bij een zender komt.
 - **Drempels** bepalen wanneer iets oranje/rood wordt. Op een rustige plek kun je
   ze verlagen, in een drukke RF-omgeving verhogen.
+- **Rijmodus** (knop) zet de drempels in één klik:
+  - *Stad* — minder gevoelig (druk RF, minder vals alarm).
+  - *Snelweg* — gevoeliger (weinig signalen; vangt zwakke/korte bursts).
+  - *Custom* — je eigen schuif-instelling. Draai je handmatig aan een drempel,
+    dan schakelt hij automatisch naar Custom.
 - Verandert de omgeving sterk? Klik **Reset ruisvloer**.
 
 Instellingen (gain, drempels, band, gain-modus, mute) worden automatisch

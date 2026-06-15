@@ -88,6 +88,18 @@ DC_NULL_BINS      = 2          # ± dit aantal bins rond center "dempen"
 # energie in één bin, dan is het een smalle storing (birdie/CW) → negeren.
 OCC_PEAK_FRAC     = 0.40       # één bin > 40% van kanaalenergie = smalle piek
                                # (gemeten: pure toon ~0.58, breed TETRA ~0.14)
+
+# Rijmodi: gevoeligheids-presets (drempels in dB boven de lokale ruis).
+#   Stad    = druk RF → minder gevoelig (minder vals alarm)
+#   Snelweg = weinig signalen → gevoeliger (vangt zwakke/korte bursts)
+#   Custom  = je eigen schuif-instelling
+RIJMODI = [
+    {"name": "Stad",    "soft": 14.0, "hard": 24.0},
+    {"name": "Snelweg", "soft": 6.0,  "hard": 14.0},
+    {"name": "Custom",  "soft": SOFT_THRESHOLD_DB, "hard": HARD_THRESHOLD_DB},
+]
+CUSTOM_IDX  = 2
+MODE_COLORS = {"Stad": "orange", "Snelweg": "green", "Custom": "blue"}
 WARMUP_FRAMES     = 60         # frames om de ruisvloer op te bouwen
 HANG_TIME_S       = 4.0        # balk blijft staan (HOLD) na het laatste contact
 RELEASE_DB_S      = 12.0       # daarna zakt de balk geleidelijk (dB per seconde)
@@ -955,6 +967,8 @@ class MainWindow(QMainWindow):
         self.det.agc_max       = s["gain"]
         self._gain_mode        = s["gain_mode"]
         self._init_band_idx    = s["band_idx"]
+        self._mode_idx         = s["mode_idx"]
+        self._custom           = {"soft": s["custom_soft"], "hard": s["custom_hard"]}
 
         self.setWindowTitle(f"{APP_NAME} — TETRA activiteitsmonitor")
         self.setMinimumSize(1080, 680)
@@ -1018,6 +1032,11 @@ class MainWindow(QMainWindow):
         self.sl_gain.changed.connect(self._on_gain)
         right.addWidget(self._panel(self.sl_gain))
 
+        # Rijmodus-knop: cyclet Stad → Snelweg → Custom (zet de drempels).
+        self.btn_mode = QPushButton()
+        self.btn_mode.clicked.connect(self._cycle_mode)
+        right.addWidget(self.btn_mode)
+
         self.sl_soft = Slider("Drempel oranje (dB)", 3, 50, self.det.soft_thr, color=C["orange"])
         self.sl_soft.changed.connect(self._on_soft)
         right.addWidget(self._panel(self.sl_soft))
@@ -1074,6 +1093,7 @@ class MainWindow(QMainWindow):
 
         # Bewaarde stand op de hardware/UI toepassen.
         self._update_mute_button()
+        self._update_mode_button()
         self._set_gain_mode(self._gain_mode)
         self._on_band(self._init_band_idx)
 
@@ -1137,9 +1157,44 @@ class MainWindow(QMainWindow):
         if self.det.hard_thr < v:
             self.det.hard_thr = v
             self.sl_hard.set_value(v)
+        self._to_custom()
 
     def _on_hard(self, v):
         self.det.hard_thr = max(v, self.det.soft_thr)
+        self._to_custom()
+
+    # ── Rijmodus (Stad / Snelweg / Custom) ──
+    def _cycle_mode(self):
+        self._apply_mode((self._mode_idx + 1) % len(RIJMODI))
+
+    def _apply_mode(self, idx):
+        self._mode_idx = idx
+        m = RIJMODI[idx]
+        soft, hard = (self._custom["soft"], self._custom["hard"]) \
+            if m["name"] == "Custom" else (m["soft"], m["hard"])
+        # set_value blokkeert de signalen → _on_soft/_on_hard vuren niet (geen
+        # ongewenste terugschakeling naar Custom); det dus zelf bijwerken.
+        self.sl_soft.set_value(soft)
+        self.sl_hard.set_value(hard)
+        self.det.soft_thr = soft
+        self.det.hard_thr = hard
+        self._update_mode_button()
+
+    def _update_mode_button(self):
+        m = RIJMODI[self._mode_idx]
+        col = C[MODE_COLORS[m["name"]]]
+        self.btn_mode.setText(f"Rijmodus:  {m['name']}")
+        self.btn_mode.setStyleSheet(
+            f"QPushButton {{ background:{C['panel']}; color:{col}; "
+            f"border:1px solid {col}; border-radius:8px; padding:8px; font-weight:bold; }}"
+            f"QPushButton:hover {{ background:{C['panel2']}; }}")
+
+    def _to_custom(self):
+        # Handmatig aan een drempel draaien → de modus wordt Custom.
+        self._custom = {"soft": self.sl_soft.value(), "hard": self.sl_hard.value()}
+        if self._mode_idx != CUSTOM_IDX:
+            self._mode_idx = CUSTOM_IDX
+            self._update_mode_button()
 
     def _on_band(self, idx):
         _, center = self._bands[idx]
@@ -1212,6 +1267,9 @@ class MainWindow(QMainWindow):
             "hard_thr":  num("hard_thr",  self.det.hard_thr,    float, 8,  70),
             "band_idx":  num("band_idx",  1,                    int,   0,  5),
             "gain_mode": num("gain_mode", 1,                    int,   0,  2),
+            "mode_idx":  num("mode_idx",  CUSTOM_IDX,           int,   0,  len(RIJMODI) - 1),
+            "custom_soft": num("custom_soft", SOFT_THRESHOLD_DB, float, 3, 50),
+            "custom_hard": num("custom_hard", HARD_THRESHOLD_DB, float, 8, 70),
             "muted":     st.value("muted", "false") == "true",
         }
 
@@ -1222,6 +1280,9 @@ class MainWindow(QMainWindow):
         st.setValue("hard_thr",  self.det.hard_thr)
         st.setValue("band_idx",  self.band.currentIndex())
         st.setValue("gain_mode", self._gain_mode)
+        st.setValue("mode_idx",  self._mode_idx)
+        st.setValue("custom_soft", self._custom["soft"])
+        st.setValue("custom_hard", self._custom["hard"])
         st.setValue("muted",     "true" if self.det.muted else "false")
 
     def closeEvent(self, event):
