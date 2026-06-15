@@ -68,8 +68,8 @@ DEFAULT_GAIN_DB   = 36.0       # Blog V3 + resonante TETRA-antenne in een actiev
                                # RF-omgeving: iets lager startpunt = minder kans op
                                # verzadiging vlakbij zenders (auto-reductie regelt bij)
 NOISE_PERCENTILE  = 30         # ruisvloer (weergave) = 30e percentiel spectrum
-SOFT_THRESHOLD_DB = 12.0       # oranje: waarschijnlijk activiteit
-HARD_THRESHOLD_DB = 22.0       # rood: duidelijke, sterke activiteit
+SOFT_THRESHOLD_DB = 18.0       # oranje: waarschijnlijk activiteit
+HARD_THRESHOLD_DB = 30.0       # rood: duidelijke, sterke activiteit
 
 # CFAR (Constant False Alarm Rate): i.p.v. één globale ruisvloer schatten we de
 # ruis LOKAAL rond elk kanaal (mediaanfilter over naburige kanalen). Zo past de
@@ -94,8 +94,8 @@ OCC_PEAK_FRAC     = 0.40       # één bin > 40% van kanaalenergie = smalle piek
 #   Snelweg = weinig signalen → gevoeliger (vangt zwakke/korte bursts)
 #   Custom  = je eigen schuif-instelling
 RIJMODI = [
-    {"name": "Stad",    "soft": 14.0, "hard": 24.0},
-    {"name": "Snelweg", "soft": 6.0,  "hard": 14.0},
+    {"name": "Stad",    "soft": 24.0, "hard": 38.0},
+    {"name": "Snelweg", "soft": 14.0, "hard": 26.0},
     {"name": "Custom",  "soft": SOFT_THRESHOLD_DB, "hard": HARD_THRESHOLD_DB},
 ]
 CUSTOM_IDX  = 2
@@ -1091,9 +1091,11 @@ class MainWindow(QMainWindow):
         right.addWidget(self.stat)
         body.addWidget(rw)
 
-        # Bewaarde stand op de hardware/UI toepassen.
+        # Bewaarde stand op de hardware/UI toepassen. _apply_mode zet meteen de
+        # juiste (actuele) drempels voor de bewaarde modus, zodat verhoogde
+        # presets ook gelden na een update i.p.v. oude waarden uit QSettings.
         self._update_mute_button()
-        self._update_mode_button()
+        self._apply_mode(self._mode_idx)
         self._set_gain_mode(self._gain_mode)
         self._on_band(self._init_band_idx)
 
