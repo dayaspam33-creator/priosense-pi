@@ -16,8 +16,8 @@ Draait zonder dongle:  python3 test_detection.py
 """
 import numpy as np
 
-import tetra_monitor as tm
-from tetra_monitor import Detector, FFT_SIZE, SAMPLE_RATE
+import tetra_core as tm
+from tetra_core import Detector, FFT_SIZE, SAMPLE_RATE
 
 
 class FakeClock:

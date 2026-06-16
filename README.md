@@ -101,6 +101,30 @@ is een dunne wrapper die je bestaande Python gebruikt, dus na
 Het programma start zelf `rtl_tcp`, bouwt ~15 seconden de ruisvloer op en gaat
 daarna scannen. Sluit het venster om te stoppen.
 
+### Op een Raspberry Pi (headless) — bekijk op je telefoon
+
+Voor in de auto kun je de Pi **zonder scherm** draaien en alles op je **telefoon**
+bekijken. De zware grafische weergave (spectrum/waterfall) valt dan weg, dus dit
+draait zelfs op een **Pi 3B+**. Je ziet de 3 balken, het alarm en knoppen voor de
+modi in je browser.
+
+```bash
+sudo apt install rtl-sdr            # rtl_tcp
+pip3 install numpy                  # méér is niet nodig (geen PyQt6/pyqtgraph!)
+python3 tetra_web.py                # start de detector + webserver
+```
+
+Bij het starten print hij de URL, bijv. `http://192.168.1.42:8080`. Open die op je
+telefoon (zelfde wifi, of de Pi als hotspot). Knoppen op de pagina: **Rijmodus**,
+**Band**, **Gain**, **Geluid**, **Reset ruisvloer**, **Wis negeerlijst**.
+
+| Optie | Betekenis |
+|---|---|
+| `--http-port` | poort van de webserver (default 8080) |
+
+> De headless versie (`tetra_web.py`) gebruikt alleen `tetra_core.py` + numpy.
+> De desktop-app (`tetra_monitor.py`) heeft daarnaast PyQt6 + pyqtgraph nodig.
+
 ### Opties
 
 | Optie | Betekenis |
