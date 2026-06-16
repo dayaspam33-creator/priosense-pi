@@ -17,6 +17,9 @@ REPO="$(cd "$(dirname "$0")" && pwd)"
 RUN_USER="$(whoami)"
 HTTP_PORT="${1:-8080}"          # optioneel: ./install_pi.sh 80
 PY="$(command -v python3)"
+# Een Pi haalt 3.2 MS/s niet bij → lager. 1.024 MS/s is ~3x lichter en dekt
+# nog ~40 kanalen. Overschrijf met:  TETRA_SAMPLE_RATE=1536000 ./install_pi.sh
+SAMP_RATE="${TETRA_SAMPLE_RATE:-1024000}"
 
 echo "📦 1/4  Pakketten installeren (rtl-sdr + numpy)…"
 sudo apt-get update -qq
@@ -42,6 +45,7 @@ Wants=network-online.target
 Type=simple
 User=$RUN_USER
 WorkingDirectory=$REPO
+Environment=TETRA_SAMPLE_RATE=$SAMP_RATE
 ExecStart=$PY $REPO/tetra_web.py --http-port $HTTP_PORT
 Restart=on-failure
 RestartSec=5
