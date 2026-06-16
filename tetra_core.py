@@ -34,12 +34,8 @@ BAND_LOW_MHZ  = 380.0
 BAND_HIGH_MHZ = 385.0
 DEFAULT_CENTER_MHZ = 382.5     # uplink-midden (nabije eenheden)
 
-SAMPLE_RATE   = int(os.environ.get("TETRA_SAMPLE_RATE", 3_200_000))
-                               # 3.2 MS/s op een snelle PC (breed venster). Een
-                               # trage Pi haalt dat niet → samples stapelen op in
-                               # rtl_tcp ("ll+, now N" blijft oplopen) en de meting
-                               # loopt achter. Zet dan TETRA_SAMPLE_RATE lager
-                               # (bv. 1_024_000); install_pi.sh doet dat al.
+SAMPLE_RATE   = 3_200_000      # 3.2 MS/s: breder venster (Blog V3 aan; bij
+                               # sample-drops eventueel terug naar 2_400_000)
 FFT_SIZE      = 4096           # 0.78 kHz/bin: fijne resolutie + betere scheiding
                                # tussen naburige 25 kHz-kanalen (minder vals alarm)
 CHANNEL_KHZ   = 25.0           # TETRA-kanaalraster: 25 kHz
