@@ -73,8 +73,8 @@ OCC_PEAK_FRAC     = 0.40       # één bin > 40% van kanaalenergie = smalle piek
 #   Snelweg = weinig signalen → gevoeliger (vangt zwakke/korte bursts)
 #   Custom  = je eigen schuif-instelling
 RIJMODI = [
-    {"name": "Stad",    "soft": 24.0, "hard": 38.0},
-    {"name": "Snelweg", "soft": 14.0, "hard": 26.0},
+    {"name": "Stad",    "soft": 30.0, "hard": 45.0},
+    {"name": "Snelweg", "soft": 25.0, "hard": 35.0},
     {"name": "Custom",  "soft": SOFT_THRESHOLD_DB, "hard": HARD_THRESHOLD_DB},
 ]
 CUSTOM_IDX  = 2
