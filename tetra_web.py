@@ -17,6 +17,7 @@ import argparse
 import json
 import os
 import socket
+import subprocess
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -230,14 +231,24 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def _lan_ip():
+    # 1) Uitgaand IP (werkt als er internet is).
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
         ip = s.getsockname()[0]
         s.close()
-        return ip
+        if not ip.startswith("127."):
+            return ip
     except Exception:
-        return "127.0.0.1"
+        pass
+    # 2) Geen internet (bijv. eigen Pi-hotspot): pak het eerste echte IP.
+    try:
+        for ip in subprocess.check_output(["hostname", "-I"], text=True).split():
+            if "." in ip and not ip.startswith("127."):
+                return ip
+    except Exception:
+        pass
+    return "127.0.0.1"
 
 
 def main():

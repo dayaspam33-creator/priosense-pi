@@ -139,6 +139,24 @@ telefoon (zelfde wifi, of de Pi als hotspot). Knoppen op de pagina: **Rijmodus**
 > De headless versie (`tetra_web.py`) gebruikt alleen `tetra_core.py` + numpy.
 > De desktop-app (`tetra_monitor.py`) heeft daarnaast PyQt6 + pyqtgraph nodig.
 
+### Eigen wifi-hotspot — plug-and-play in de auto
+
+Geen router in de auto? Laat de Pi z'n **eigen wifi** opzetten met een **vast IP**,
+dan is de URL altijd hetzelfde:
+
+```bash
+./make_hotspot.sh                       # of: ./make_hotspot.sh MijnSSID MijnWachtwoord
+```
+
+Daarna: Pi aanzetten → telefoon verbinden met het wifi-netwerk **TetraMonitor**
+(wachtwoord `tetra1234`) → open **`http://10.42.0.1:8080`**. Eén keer bookmarken
+en klaar. De hotspot komt bij elke boot vanzelf op.
+
+> Let op: wlan0 wordt dan een hotspot, dus de Pi heeft geen wifi-internet meer
+> (in de auto niet nodig). Zet 'm uit met `./make_hotspot.sh off` om weer met je
+> gewone wifi te verbinden (bijv. thuis om te updaten). Stel de hotspot in via het
+> Pi-scherm of een netwerkkabel — een SSH-sessie over wifi valt anders weg.
+
 ### Opties
 
 | Optie | Betekenis |
