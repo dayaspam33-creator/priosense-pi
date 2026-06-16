@@ -193,8 +193,40 @@ function render(s){
     'actief: '+s.total+'   ·   gain '+Math.round(s.gain)+' dB   ·   drempel '+
     Math.round(s.soft)+'/'+Math.round(s.hard)+' dB'+(s.haze_db>0?'   ·   ⚠ vloer +'+s.haze_db+' dB':'');
 }
-async function poll(){try{var r=await fetch('/state');render(await r.json());}catch(e){}}
-async function cmd(a){try{var r=await fetch('/cmd?action='+a,{method:'POST'});render(await r.json());}catch(e){}}
+// ── Geiger-piepjes: sneller bij sterker signaal ─────────────────────────
+var AC=null, nextBeep=0, lastLvl=0, lastSoft=18, lastHard=30, muted=false;
+function ensureAudio(){if(!AC){try{AC=new (window.AudioContext||window.webkitAudioContext)();}catch(e){}}}
+document.body.addEventListener('click',ensureAudio,{once:false});
+function beep(lvl,hard){
+  if(!AC) return;
+  var t=AC.currentTime, o=AC.createOscillator(), g=AC.createGain();
+  var pitch=600+Math.min(1,lvl/Math.max(1,hard))*900;       // 600→1500 Hz
+  o.frequency.value=pitch; o.type='square';
+  g.gain.setValueAtTime(0.0001,t);
+  g.gain.exponentialRampToValueAtTime(0.25,t+0.005);
+  g.gain.exponentialRampToValueAtTime(0.0001,t+0.06);
+  o.connect(g); g.connect(AC.destination);
+  o.start(t); o.stop(t+0.07);
+}
+function geigerTick(){
+  if(!muted && AC && lastLvl>=lastSoft){
+    var now=AC.currentTime*1000;
+    // interval: 800 ms bij soft → 70 ms bij hard (en sneller daarboven)
+    var span=Math.max(4,lastHard-lastSoft);
+    var x=Math.max(0,(lastLvl-lastSoft)/span);              // 0..1+
+    var interval=Math.max(50, 800 - x*730);
+    if(now>=nextBeep){beep(lastLvl,lastHard); nextBeep=now+interval;}
+  }
+  requestAnimationFrame(geigerTick);
+}
+requestAnimationFrame(geigerTick);
+
+async function poll(){try{var r=await fetch('/state');var s=await r.json();
+  lastSoft=s.soft; lastHard=s.hard; muted=s.muted;
+  lastLvl=s.active.length?s.active[0][1]:0;
+  if(s.overload) lastLvl=Math.max(lastLvl,s.hard+10);
+  render(s);}catch(e){}}
+async function cmd(a){ensureAudio();try{var r=await fetch('/cmd?action='+a,{method:'POST'});render(await r.json());}catch(e){}}
 setInterval(poll,400);poll();
 </script></body></html>"""
 
