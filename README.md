@@ -108,6 +108,20 @@ bekijken. De zware grafische weergave (spectrum/waterfall) valt dan weg, dus dit
 draait zelfs op een **Pi 3B+**. Je ziet de 3 balken, het alarm en knoppen voor de
 modi in je browser.
 
+**Snelste manier — installatiescript** (installeert alles + autostart bij boot):
+
+```bash
+chmod +x install_pi.sh
+./install_pi.sh                     # of: ./install_pi.sh 80   (andere poort)
+```
+
+Dit installeert rtl_tcp + numpy, blokkeert de DVB-T-kerneldriver en zet een
+systemd-service neer die bij elke boot automatisch start. Daarna staat het er
+gewoon zodra je de Pi aanzet — open `http://<pi-ip>:8080` op je telefoon.
+Beheer: `sudo systemctl status|restart|stop tetramonitor`.
+
+**Handmatig** (zonder autostart):
+
 ```bash
 sudo apt install rtl-sdr            # rtl_tcp
 pip3 install numpy                  # méér is niet nodig (geen PyQt6/pyqtgraph!)

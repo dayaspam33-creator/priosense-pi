@@ -116,9 +116,10 @@ TCP_HOST = "127.0.0.1"
 
 # rtl_tcp zoekpaden (Homebrew Intel + Apple Silicon + PATH)
 _RTL_PATHS = [
-    "/opt/homebrew/bin/rtl_tcp",
-    "/usr/local/bin/rtl_tcp",
-    "rtl_tcp",
+    "/opt/homebrew/bin/rtl_tcp",   # macOS Apple Silicon
+    "/usr/local/bin/rtl_tcp",      # macOS Intel
+    "/usr/bin/rtl_tcp",            # Linux / Raspberry Pi (apt)
+    "rtl_tcp",                     # val terug op PATH
 ]
 
 def _script_dir() -> str:
