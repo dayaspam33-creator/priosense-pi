@@ -108,6 +108,58 @@ bekijken. De zware grafische weergave (spectrum/waterfall) valt dan weg, dus dit
 draait zelfs op een **Pi 3B+**. Je ziet de 3 balken, het alarm en knoppen voor de
 modi in je browser.
 
+#### Stap voor stap — van SD-kaart tot rijden
+
+**Wat je nodig hebt:** een Pi (3B+ of nieuwer), SD-kaart, de RTL-SDR Blog V3 +
+antenne, en even een computer om de kaart te schrijven.
+
+1. **OS schrijven** — installeer **Raspberry Pi Imager** (raspberrypi.com/software).
+   Kies OS → **Raspberry Pi OS Lite (64-bit)**. Klik vóór het schrijven op het
+   **tandwiel** (instellingen) en zet:
+   - ✅ SSH inschakelen + gebruikersnaam & wachtwoord
+   - ✅ Wifi van je huis (om te installeren)
+   - ✅ **Wifi-land: NL** (anders start de hotspot later niet)
+   - (optioneel) hostnaam, bijv. `tetra`
+
+   Schrijf naar de SD-kaart, stop 'm in de Pi, sluit de dongle aan, zet 'm aan.
+
+2. **Inloggen** vanaf je computer (zelfde wifi):
+   ```bash
+   ssh <gebruikersnaam>@tetra.local      # of @raspberrypi.local / het IP
+   ```
+
+3. **Project ophalen** (de Pi-branch):
+   ```bash
+   sudo apt update && sudo apt install -y git
+   git clone https://github.com/mylovanloenen/tetra-monitor
+   cd tetra-monitor && git checkout tetra-monitor-pi
+   ```
+
+4. **Installeren** (rtl_tcp + numpy + autostart):
+   ```bash
+   chmod +x install_pi.sh make_hotspot.sh
+   ./install_pi.sh
+   ```
+
+5. **Testen op je huis-wifi** — open op je telefoon de URL die hij print
+   (bijv. `http://tetra.local:8080`). Zie je de 3 balken en de knoppen? ✅
+
+6. **Hotspot aanzetten voor de auto** (doe dit via SSH; je verbinding valt heel
+   even weg als wlan0 hotspot wordt):
+   ```bash
+   ./make_hotspot.sh
+   ```
+
+7. **In de auto:** Pi aanzetten → telefoon op wifi **TetraMonitor** (`tetra1234`)
+   → open **`http://10.42.0.1:8080`** en bookmark 'm. Klaar. 🚗
+
+> Thuis updaten? `./make_hotspot.sh off` → reboot → weer op je gewone wifi met
+> internet. Klaar voor de auto? `./make_hotspot.sh` weer aan.
+
+---
+
+De losse scripts en opties hieronder, voor als je iets handmatig wilt:
+
 **Snelste manier — installatiescript** (installeert alles + autostart bij boot):
 
 ```bash
