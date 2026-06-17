@@ -241,7 +241,25 @@ class RtlTcpSource:
                 self._sock.close()
         except Exception:
             pass
-        self._open_socket()
+        self._sock = None
+        if self.extern:
+            self._open_socket()          # externe rtl_tcp draait zelf
+            return
+        # Eigen rtl_tcp opnieuw starten: na uitpluggen is dat proces gestopt en
+        # moet het de (terug-ingeplugde) dongle opnieuw pakken. connect() doet
+        # pkill + start + socket openen; dit faalt zolang de dongle weg is,
+        # zodat de herverbind-lus blijft proberen tot je 'm terugsteekt.
+        if self._proc:
+            try:
+                self._proc.terminate()
+                self._proc.wait(timeout=2)
+            except Exception:
+                try:
+                    self._proc.kill()
+                except Exception:
+                    pass
+            self._proc = None
+        self.connect()
 
     def apply_gain(self):
         if not self._sock:
@@ -339,6 +357,7 @@ class Detector(threading.Thread):
         self.auto_blacklist = True     # constante storingskanalen negeren
         self.channels: dict[float, Channel] = {}
         self.status = "Opstarten…"
+        self.connected = True          # False zodra de dongle wegvalt (voor de UI)
         self.n_frames = 0
         self.alarm_level = 0       # 0 = stil, 1 = oranje, 2 = rood
         self.alarm_freq = 0.0
@@ -466,18 +485,27 @@ class Detector(threading.Thread):
             self.n_frames = 0
 
     def _reconnect(self):
-        self.status = "Herverbinden…"
+        self.connected = False
+        self.status = "⚠ SDR losgekoppeld — steek de dongle terug"
+        with self.lock:
+            self.channels.clear()      # oude balken niet laten hangen
+        first = True
         while self.running:
             try:
-                self.src.reconnect()
+                self.src.reconnect()   # herstart rtl_tcp + opent socket opnieuw
                 with self.lock:
                     self.n_frames = 0
                     self.channels.clear()
-                self.status = "Herverbonden"
+                self.connected = True
+                self.status = "Herverbonden — ruisvloer meten…"
+                print("[detector] dongle weer verbonden")
                 return
             except Exception as e:
-                print(f"[detector] herverbinden mislukt: {e}")
-                time.sleep(3)
+                if first:
+                    print(f"[detector] dongle weg, wacht op herverbinden: {e}")
+                    first = False
+                self.status = "⚠ SDR losgekoppeld — steek de dongle terug"
+                time.sleep(2)
 
     def _process(self, raw):
         iq = (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 127.5) / 127.5
@@ -695,6 +723,7 @@ class Detector(threading.Thread):
                 key=lambda x: -x[1])
             return {
                 "status": self.status,
+                "connected": self.connected,
                 "alarm_level": self.alarm_level,
                 "alarm_freq": self.alarm_freq,
                 "alarm_db": self.alarm_db,

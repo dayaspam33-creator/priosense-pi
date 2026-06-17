@@ -164,6 +164,7 @@ class Controller:
             "alarm_freq": round(snap["alarm_freq"], 4),
             "alarm_db":  round(snap["alarm_db"], 1),
             "status":    snap["status"],
+            "connected": snap["connected"],
             "overload":  snap["overload"],
             "haze_db":   round(snap["haze_db"], 0),
             "blacklist": snap["blacklist"],
@@ -294,7 +295,9 @@ function render(s){
   var bt=document.getElementById('bt'), bd=document.getElementById('bd'),
       ban=document.getElementById('banner');
   var bg='var(--panel)',bc='var(--sep)',tc='var(--gray2)';
-  if(s.overload){bg='#2d0b0b';bc='var(--red)';tc='var(--red)';
+  if(s.connected===false){bg='#2d0b0b';bc='var(--red)';tc='var(--red)';
+     bt.textContent='🔌 SDR LOSGEKOPPELD';bd.textContent='steek de dongle terug — verbindt automatisch';}
+  else if(s.overload){bg='#2d0b0b';bc='var(--red)';tc='var(--red)';
      bt.textContent='🚨 ZEER STERK SIGNAAL DICHTBIJ';bd.textContent='zender vlakbij — overstuur';}
   else if(s.alarm==2){bg='#2d0b0b';bc='var(--red)';tc='var(--red)';
      bt.textContent='🚨 ACTIVITEIT';bd.textContent=s.alarm_freq.toFixed(3)+' MHz   +'+Math.round(s.alarm_db)+' dB';}
