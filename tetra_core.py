@@ -407,13 +407,25 @@ class Detector(threading.Thread):
         need = FFT_SIZE * 2
         while self.running:
             try:
-                chunk = self.src.recv(8192)
+                chunk = self.src.recv(65536)
                 if not chunk:
                     self._reconnect()
                     buf.clear(); continue
                 buf.extend(chunk)
-                while len(buf) >= need:
-                    raw = bytes(buf[:need]); del buf[:need]
+                # Verwerk alleen het NIEUWSTE volledige frame en gooi de rest van
+                # de stapel weg. Op een trage Pi haalt de FFT de volle ~780 fps
+                # niet bij → samples stapelen op in rtl_tcp ("ll+" loopt op). Door
+                # per ronde naar het verste frame te springen blijven we altijd
+                # bij, terwijl de SAMPLERATE hoog blijft (volle bandbreedte). Dit
+                # regelt zichzelf: bij achterstand komt recv() grote brokken binnen
+                # → meer frames overgeslagen; bij een snelle PC één frame per ronde
+                # → gedrag onveranderd. De ballistiek is tijd-gebaseerd (dt), dus
+                # een wisselende framerate verstoort hold/release niet.
+                if len(buf) >= need:
+                    nframes = len(buf) // need        # hele frames in de buffer
+                    start = (nframes - 1) * need       # begin van het laatste frame
+                    raw = bytes(buf[start:start + need])
+                    del buf[:nframes * need]           # alignment blijft (×need)
                     self._process(raw)
             except socket.timeout:
                 continue
