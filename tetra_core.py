@@ -307,6 +307,7 @@ class Detector(threading.Thread):
         self.src = source
         self.running = False
         self.lock = threading.Lock()
+        self._latest = None                # nieuwste ruwe frame (lees-thread → verwerking)
 
         # Blackman: lagere zijlobben dan Hanning → betere scheiding van naburige
         # kanalen, zodat een sterk signaal niet "lekt" naar de buren.
@@ -403,36 +404,45 @@ class Detector(threading.Thread):
     # ── hoofdlus ──
     def run(self):
         self.running = True
+        # Aparte lees-thread trekt de socket continu leeg en bewaart alleen het
+        # NIEUWSTE frame; déze thread verwerkt dat op z'n eigen tempo. Zo loopt
+        # rtl_tcp niet vol ("ll+" blijft laag) ook als de FFT de volle ~780 fps
+        # niet haalt, terwijl de SAMPLERATE hoog blijft (volle 3.2 MS/s-band).
+        # We verwerken steeds het laatste frame en slaan de tussenliggende over;
+        # de ballistiek is tijd-gebaseerd (dt), dus een wisselende framerate
+        # verstoort hold/release niet.
+        threading.Thread(target=self._reader, daemon=True).start()
+        last = None
+        while self.running:
+            raw = self._latest
+            if raw is None or raw is last:
+                time.sleep(0.003)            # nog geen nieuw frame: heel kort wachten
+                continue
+            last = raw
+            self._process(raw)
+
+    def _reader(self):
+        """Leest de dongle zo snel mogelijk leeg en houdt alléén het nieuwste
+        frame vast. Doet geen zware verwerking, dus de socket blijft leeg en
+        rtl_tcp stapelt niets op — ongeacht hoe traag de FFT is."""
         buf = bytearray()
         need = FFT_SIZE * 2
         while self.running:
             try:
                 chunk = self.src.recv(65536)
                 if not chunk:
-                    self._reconnect()
-                    buf.clear(); continue
+                    self._reconnect(); buf.clear(); continue
                 buf.extend(chunk)
-                # Verwerk alleen het NIEUWSTE volledige frame en gooi de rest van
-                # de stapel weg. Op een trage Pi haalt de FFT de volle ~780 fps
-                # niet bij → samples stapelen op in rtl_tcp ("ll+" loopt op). Door
-                # per ronde naar het verste frame te springen blijven we altijd
-                # bij, terwijl de SAMPLERATE hoog blijft (volle bandbreedte). Dit
-                # regelt zichzelf: bij achterstand komt recv() grote brokken binnen
-                # → meer frames overgeslagen; bij een snelle PC één frame per ronde
-                # → gedrag onveranderd. De ballistiek is tijd-gebaseerd (dt), dus
-                # een wisselende framerate verstoort hold/release niet.
                 if len(buf) >= need:
                     nframes = len(buf) // need        # hele frames in de buffer
                     start = (nframes - 1) * need       # begin van het laatste frame
-                    raw = bytes(buf[start:start + need])
+                    self._latest = bytes(buf[start:start + need])
                     del buf[:nframes * need]           # alignment blijft (×need)
-                    self._process(raw)
             except socket.timeout:
                 continue
             except Exception as e:
-                print(f"[detector] {e}")
-                self._reconnect()
-                buf.clear()
+                print(f"[detector] reader: {e}")
+                self._reconnect(); buf.clear()
 
     def _agc_step(self, peak, now):
         """Automatische gain-reductie met hysterese en cooldown."""
