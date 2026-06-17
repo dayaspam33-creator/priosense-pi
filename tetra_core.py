@@ -284,6 +284,11 @@ class RtlTcpSource:
     def recv(self, n):
         return self._sock.recv(n)
 
+    def proc_dead(self):
+        """True als onze eigen rtl_tcp gestopt is (meestal: dongle losgekoppeld).
+        Bij externe rtl_tcp weten we dit niet → False."""
+        return (not self.extern) and self._proc is not None and self._proc.poll() is not None
+
     def _drain(self):
         try:
             for line in self._proc.stdout:
@@ -443,14 +448,20 @@ class Detector(threading.Thread):
     def _reader(self):
         """Leest de dongle zo snel mogelijk leeg en houdt alléén het nieuwste
         frame vast. Doet geen zware verwerking, dus de socket blijft leeg en
-        rtl_tcp stapelt niets op — ongeacht hoe traag de FFT is."""
+        rtl_tcp stapelt niets op — ongeacht hoe traag de FFT is.
+
+        Bevat ook de dongle-watchdog: bij 3.2 MS/s stroomt er continu data, dus
+        als er een paar seconden NIETS binnenkomt (of rtl_tcp is gestopt), is de
+        dongle losgekoppeld → herverbinden (en de UI toont de waarschuwing)."""
         buf = bytearray()
         need = FFT_SIZE * 2
+        last_data = time.time()
         while self.running:
             try:
                 chunk = self.src.recv(65536)
-                if not chunk:
-                    self._reconnect(); buf.clear(); continue
+                if not chunk:                          # socket dicht = rtl_tcp weg
+                    self._reconnect(); buf.clear(); last_data = time.time(); continue
+                last_data = time.time()
                 buf.extend(chunk)
                 if len(buf) >= need:
                     nframes = len(buf) // need        # hele frames in de buffer
@@ -458,10 +469,14 @@ class Detector(threading.Thread):
                     self._latest = bytes(buf[start:start + need])
                     del buf[:nframes * need]           # alignment blijft (×need)
             except socket.timeout:
+                # Geen data: dongle eruit? rtl_tcp gestopt → meteen; anders zodra
+                # er >3 s niets meer kwam (normaal stroomt het continu).
+                if self.src.proc_dead() or time.time() - last_data > 3.0:
+                    self._reconnect(); buf.clear(); last_data = time.time()
                 continue
             except Exception as e:
                 print(f"[detector] reader: {e}")
-                self._reconnect(); buf.clear()
+                self._reconnect(); buf.clear(); last_data = time.time()
 
     def _agc_step(self, peak, now):
         """Automatische gain-reductie met hysterese en cooldown."""
