@@ -45,6 +45,9 @@ WorkingDirectory=$REPO
 ExecStart=$PY $REPO/tetra_web.py --http-port $HTTP_PORT
 Restart=on-failure
 RestartSec=5
+# rtl_tcp reageert niet op SIGTERM; zonder dit wacht systemd 90 s voor het 'm
+# hard afsluit. Na 5 s SIGKILL → herstarten duurt seconden i.p.v. anderhalve min.
+TimeoutStopSec=5
 
 [Install]
 WantedBy=multi-user.target
