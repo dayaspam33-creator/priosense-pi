@@ -38,7 +38,10 @@ class Controller:
         self.custom    = s.get("custom", {"soft": det.soft_thr, "hard": det.hard_thr})
         self.band_idx  = s.get("band_idx", 1)
         self.gain_mode = s.get("gain_mode", 1)
+        self.gain      = s.get("gain", det.src.gain_db)   # ingestelde gain (dB)
         self.det.muted = s.get("muted", False)
+        self.det.src.gain_db = self.gain
+        self.det.agc_max     = self.gain                  # plafond voor auto-reductie
         self.apply_mode(self.mode_idx)
         self.apply_gain_mode(self.gain_mode)
         self.det.retune(BANDS[self.band_idx][1])
@@ -55,7 +58,7 @@ class Controller:
             with open(SETTINGS_FILE, "w") as f:
                 json.dump({"mode_idx": self.mode_idx, "custom": self.custom,
                            "band_idx": self.band_idx, "gain_mode": self.gain_mode,
-                           "muted": self.det.muted}, f)
+                           "gain": self.gain, "muted": self.det.muted}, f)
         except OSError:
             pass
 
@@ -95,6 +98,14 @@ class Controller:
                 self.custom["hard"] = v
                 self.det.hard_thr = v
             self.mode_idx = CUSTOM_IDX
+        elif action == "gainval" and value is not None:
+            # Zet de gain-waarde én het auto-reductie-plafond; werkt zo in elke
+            # modus (handmatig = vast, auto-reductie = normale/maximale gain).
+            v = max(0.0, min(49.0, float(value)))
+            self.gain = v
+            self.det.src.gain_db = v
+            self.det.agc_max = v
+            self.det.src.apply_gain()
         self._save()
 
     def state(self):
@@ -109,7 +120,8 @@ class Controller:
             "overload":  snap["overload"],
             "haze_db":   round(snap["haze_db"], 0),
             "blacklist": snap["blacklist"],
-            "gain":      round(snap["gain"], 0),
+            "gain":      round(snap["gain"], 0),       # live (kan auto-gedaald zijn)
+            "gain_set":  round(self.gain, 0),          # ingesteld (schuifstand)
             "soft":      self.det.soft_thr,
             "hard":      self.det.hard_thr,
             "mode":      RIJMODI[self.mode_idx]["name"],
@@ -180,6 +192,11 @@ PAGE = r"""<!doctype html><html lang="nl"><head>
       oninput="document.getElementById('vhard').textContent=this.value+' dB'"
       onchange="cmdVal('hard',this.value)">
     <span class="v" id="vhard">— dB</span></div>
+  <div class="sl"><label>Gain</label>
+    <input id="sgain" type="range" min="0" max="49" step="1"
+      oninput="document.getElementById('vgain').textContent=this.value+' dB'"
+      onchange="cmdVal('gainval',this.value)">
+    <span class="v" id="vgain">— dB</span></div>
 </div>
 <div id="info">—</div>
 <script>
@@ -206,11 +223,13 @@ function renderBar(i,s){
 var sliderTouchedAt=0;
 function syncSliders(s){
   if(Date.now()-sliderTouchedAt<1500) return;     // niet overschrijven tijdens slepen
-  var ss=document.getElementById('ssoft'), sh=document.getElementById('shard');
+  var ss=document.getElementById('ssoft'), sh=document.getElementById('shard'),
+      sg=document.getElementById('sgain');
   ss.value=Math.round(s.soft); document.getElementById('vsoft').textContent=Math.round(s.soft)+' dB';
   sh.value=Math.round(s.hard); document.getElementById('vhard').textContent=Math.round(s.hard)+' dB';
+  sg.value=Math.round(s.gain_set); document.getElementById('vgain').textContent=Math.round(s.gain_set)+' dB';
 }
-['ssoft','shard'].forEach(function(id){
+['ssoft','shard','sgain'].forEach(function(id){
   document.getElementById(id).addEventListener('input',function(){sliderTouchedAt=Date.now();});
 });
 function render(s){
