@@ -17,9 +17,13 @@ import argparse
 import json
 import os
 import socket
+import struct
 import subprocess
 import urllib.parse
+import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import numpy as np
 
 from tetra_core import (Detector, RtlTcpSource, RIJMODI, BANDS, CUSTOM_IDX,
                         SOFT_THRESHOLD_DB, HARD_THRESHOLD_DB, DEFAULT_GAIN_DB)
@@ -27,6 +31,49 @@ from tetra_core import (Detector, RtlTcpSource, RIJMODI, BANDS, CUSTOM_IDX,
 GAIN_MODES = ["Handmatig", "Auto-reductie", "Volautomatisch"]
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              "tetra_web_settings.json")
+
+
+# ── App-icoon (zelf gegenereerd, geen externe bestanden nodig) ───────────────
+def _png_bytes(rgb):
+    """Minimale PNG-encoder (RGB, 8-bit) — alleen numpy + zlib + struct."""
+    h, w, _ = rgb.shape
+    raw = bytearray()
+    for y in range(h):
+        raw.append(0)                       # filterbyte 0 per scanlijn
+        raw.extend(rgb[y].tobytes())
+    def _chunk(typ, data):
+        return (struct.pack(">I", len(data)) + typ + data
+                + struct.pack(">I", zlib.crc32(typ + data) & 0xffffffff))
+    return (b"\x89PNG\r\n\x1a\n"
+            + _chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + _chunk(b"IDAT", zlib.compress(bytes(raw), 9))
+            + _chunk(b"IEND", b""))
+
+def _make_icon(size=512):
+    """Donkere tegel met 3 oplopende balken (groen/geel/rood) — past bij de app.
+    iOS maakt de hoeken zelf rond, dus we vullen het hele vierkant."""
+    img = np.empty((size, size, 3), dtype=np.uint8)
+    img[:] = (16, 18, 22)                                   # achtergrond #101216
+    colors  = [(52, 210, 123), (255, 204, 51), (255, 77, 77)]   # groen/geel/rood
+    heights = [0.42, 0.66, 0.90]
+    bw  = int(size * 0.17)
+    gap = int(size * 0.075)
+    x0  = (size - (3 * bw + 2 * gap)) // 2
+    base = int(size * 0.82)
+    for i, (c, hf) in enumerate(zip(colors, heights)):
+        x = x0 + i * (bw + gap)
+        top = base - int(size * 0.62 * hf)
+        img[top:base, x:x + bw] = c
+    return _png_bytes(img)
+
+ICON_PNG = _make_icon()
+MANIFEST = json.dumps({
+    "name": "TetraMonitor", "short_name": "TetraMonitor",
+    "display": "standalone", "background_color": "#101216",
+    "theme_color": "#101216", "start_url": "/",
+    "icons": [{"src": "/icon.png", "sizes": "192x192", "type": "image/png"},
+              {"src": "/icon.png", "sizes": "512x512", "type": "image/png"}],
+})
 
 
 # ── Bediening (headless, gedeeld door alle webverzoeken) ─────────────────────
@@ -134,15 +181,26 @@ class Controller:
 # ── Telefoonpagina ───────────────────────────────────────────────────────────
 PAGE = r"""<!doctype html><html lang="nl"><head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <title>TetraMonitor</title>
+<!-- "Toevoegen aan beginscherm": fullscreen openen zonder Safari-balk, als een app -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="TetraMonitor">
+<meta name="theme-color" content="#101216">
+<link rel="apple-touch-icon" href="/icon.png">
+<link rel="icon" href="/icon.png">
+<link rel="manifest" href="/manifest.json">
 <style>
   :root{--bg:#101216;--panel:#181b20;--panel2:#23272e;--sep:#2c313a;
         --green:#34d27b;--yellow:#ffcc33;--red:#ff4d4d;--orange:#ff9933;
         --gray1:#c7cdd6;--gray2:#8a92a0;}
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   body{margin:0;background:var(--bg);color:var(--gray1);
-       font-family:-apple-system,system-ui,Roboto,sans-serif;}
+       font-family:-apple-system,system-ui,Roboto,sans-serif;
+       /* in standalone-modus: ruimte vrijhouden voor statusbalk/notch */
+       padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);}
   #banner{margin:8px;padding:14px;border-radius:14px;border:2px solid var(--sep);
           background:var(--panel);text-align:center}
   #banner b{font-size:20px;display:block}
@@ -310,6 +368,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, "text/html; charset=utf-8", PAGE.encode())
         elif self.path.startswith("/state"):
             self._send(200, "application/json", json.dumps(self.controller.state()).encode())
+        elif self.path.startswith("/icon"):
+            self._send(200, "image/png", ICON_PNG)
+        elif self.path.startswith("/manifest"):
+            self._send(200, "application/manifest+json", MANIFEST.encode())
         else:
             self._send(404, "text/plain", b"404")
 
