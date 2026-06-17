@@ -359,10 +359,14 @@ setInterval(poll,400);poll();
 class Handler(BaseHTTPRequestHandler):
     controller = None
 
-    def _send(self, code, ctype, body):
+    def _send(self, code, ctype, body, cache=False):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        # Pagina/JSON nooit cachen, anders blijft een telefoon (zeker als
+        # beginscherm-app) hangen op oude JavaScript en mist hij nieuwe functies.
+        if not cache:
+            self.send_header("Cache-Control", "no-store, must-revalidate")
         self.end_headers()
         self.wfile.write(body)
 
