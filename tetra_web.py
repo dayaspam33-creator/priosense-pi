@@ -50,27 +50,26 @@ def _png_bytes(rgb):
             + _chunk(b"IEND", b""))
 
 def _make_icon(size=512):
-    """Donkere tegel met 3 oplopende balken (groen/geel/rood) — past bij de app.
+    """Donkere PrioSense-tegel met één rechtopstaande balk (groen→oranje→rood).
     iOS maakt de hoeken zelf rond, dus we vullen het hele vierkant."""
     img = np.empty((size, size, 3), dtype=np.uint8)
-    img[:] = (16, 18, 22)                                   # achtergrond #101216
-    colors  = [(52, 210, 123), (255, 204, 51), (255, 77, 77)]   # groen/geel/rood
-    heights = [0.42, 0.66, 0.90]
-    bw  = int(size * 0.17)
-    gap = int(size * 0.075)
-    x0  = (size - (3 * bw + 2 * gap)) // 2
-    base = int(size * 0.82)
-    for i, (c, hf) in enumerate(zip(colors, heights)):
-        x = x0 + i * (bw + gap)
-        top = base - int(size * 0.62 * hf)
-        img[top:base, x:x + bw] = c
+    img[:] = (16, 16, 20)                                   # achtergrond #101014
+    bw   = int(size * 0.30)
+    x0   = (size - bw) // 2
+    top  = int(size * 0.16)
+    base = int(size * 0.84)
+    h    = base - top
+    # van onder naar boven: groen (#30d158), oranje (#ff9f0a), rood (#ff453a)
+    img[base - int(h * 0.45):base,                 x0:x0 + bw] = (48, 209, 88)
+    img[base - int(h * 0.78):base - int(h * 0.45), x0:x0 + bw] = (255, 159, 10)
+    img[top:base - int(h * 0.78),                  x0:x0 + bw] = (255, 69, 58)
     return _png_bytes(img)
 
 ICON_PNG = _make_icon()
 MANIFEST = json.dumps({
-    "name": "TetraMonitor", "short_name": "TetraMonitor",
-    "display": "standalone", "background_color": "#101216",
-    "theme_color": "#101216", "start_url": "/",
+    "name": "PrioSense", "short_name": "PrioSense",
+    "display": "standalone", "background_color": "#101014",
+    "theme_color": "#101014", "start_url": "/",
     "icons": [{"src": "/icon.png", "sizes": "192x192", "type": "image/png"},
               {"src": "/icon.png", "sizes": "512x512", "type": "image/png"}],
 })
@@ -82,7 +81,9 @@ class Controller:
         self.det = det
         s = self._load()
         self.mode_idx  = s.get("mode_idx", CUSTOM_IDX)
-        self.custom    = s.get("custom", {"soft": det.soft_thr, "hard": det.hard_thr})
+        self.custom    = s.get("custom", {"groen": RIJMODI[CUSTOM_IDX]["groen"],
+                                          "soft": det.soft_thr, "hard": det.hard_thr})
+        self.green     = self.custom.get("groen", RIJMODI[CUSTOM_IDX]["groen"])  # vloer (alleen weergave)
         self.band_idx  = s.get("band_idx", 1)
         self.gain_mode = s.get("gain_mode", 1)
         self.gain      = s.get("gain", det.src.gain_db)   # ingestelde gain (dB)
@@ -112,8 +113,12 @@ class Controller:
     def apply_mode(self, idx):
         self.mode_idx = idx
         m = RIJMODI[idx]
-        soft, hard = (self.custom["soft"], self.custom["hard"]) \
-            if m["name"] == "Custom" else (m["soft"], m["hard"])
+        if m["name"] == "Custom":
+            green, soft, hard = (self.custom.get("groen", m["groen"]),
+                                 self.custom["soft"], self.custom["hard"])
+        else:
+            green, soft, hard = m["groen"], m["soft"], m["hard"]
+        self.green = green                                   # vloer (alleen weergave)
         self.det.soft_thr, self.det.hard_thr = soft, hard
 
     def apply_gain_mode(self, idx):
@@ -136,9 +141,12 @@ class Controller:
             self.det.reset_noise_floor()
         elif action == "blacklist":
             self.det.clear_blacklist()
-        elif action in ("soft", "hard") and value is not None:
+        elif action in ("groen", "soft", "hard") and value is not None:
             v = max(1.0, min(80.0, float(value)))
-            if action == "soft":
+            if action == "groen":
+                self.custom["groen"] = v
+                self.green = v
+            elif action == "soft":
                 self.custom["soft"] = v
                 self.det.soft_thr = v
             else:
@@ -170,6 +178,7 @@ class Controller:
             "blacklist": snap["blacklist"],
             "gain":      round(snap["gain"], 0),       # live (kan auto-gedaald zijn)
             "gain_set":  round(self.gain, 0),          # ingesteld (schuifstand)
+            "groen":     self.green,                    # vloer: vanaf hier loopt de balk
             "soft":      self.det.soft_thr,
             "hard":      self.det.hard_thr,
             "mode":      RIJMODI[self.mode_idx]["name"],
@@ -183,147 +192,194 @@ class Controller:
 PAGE = r"""<!doctype html><html lang="nl"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<title>TetraMonitor</title>
-<!-- "Toevoegen aan beginscherm": fullscreen openen zonder Safari-balk, als een app -->
+<title>PrioSense</title>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="TetraMonitor">
-<meta name="theme-color" content="#101216">
+<meta name="apple-mobile-web-app-title" content="PrioSense">
+<meta name="theme-color" content="#101014">
 <link rel="apple-touch-icon" href="/icon.png">
 <link rel="icon" href="/icon.png">
 <link rel="manifest" href="/manifest.json">
 <style>
-  :root{--bg:#101216;--panel:#181b20;--panel2:#23272e;--sep:#2c313a;
-        --green:#34d27b;--yellow:#ffcc33;--red:#ff4d4d;--orange:#ff9933;
-        --gray1:#c7cdd6;--gray2:#8a92a0;}
+  :root{--bg:#101014;--green:#30d158;--orange:#ff9f0a;--red:#ff453a;--blue:#0a84ff;
+        --g1:rgba(235,235,245,.6);--g2:rgba(235,235,245,.45);
+        --glass:rgba(255,255,255,.07);--gline:rgba(255,255,255,.14);--ghi:rgba(255,255,255,.2);}
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-  body{margin:0;background:var(--bg);color:var(--gray1);
+  body{margin:0;background:var(--bg);color:#fff;
        font-family:-apple-system,system-ui,Roboto,sans-serif;
-       /* in standalone-modus: ruimte vrijhouden voor statusbalk/notch */
-       padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);}
-  #banner{margin:8px;padding:14px;border-radius:14px;border:2px solid var(--sep);
-          background:var(--panel);text-align:center}
-  #banner b{font-size:20px;display:block}
-  #banner span{font-size:13px;color:var(--gray1)}
-  #bars{display:flex;gap:8px;margin:8px;height:46vh}
-  .bar{flex:1;background:var(--panel);border-radius:12px;display:flex;
-       flex-direction:column;align-items:center;padding:8px 4px;overflow:hidden}
-  .track{flex:1;width:46%;background:var(--panel2);border-radius:8px;
-         position:relative;overflow:hidden;min-height:40px}
-  .fill{position:absolute;left:0;right:0;bottom:0;border-radius:8px;
-        transition:height .15s,background .15s}
-  .lbl{margin-top:6px;text-align:center;line-height:1.25}
-  .lbl .f{font-weight:700;font-size:16px}
-  .lbl .d{font-weight:700;font-size:15px}
-  .lbl .t{font-size:13px;font-weight:700}
-  .empty{color:var(--gray2);font-size:22px;font-weight:700;margin:auto}
-  #btns{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px}
-  button{padding:14px 8px;border-radius:10px;border:1px solid var(--sep);
-         background:var(--panel);color:var(--gray1);font-size:15px;font-weight:600}
-  button:active{background:var(--panel2)}
-  button small{display:block;color:var(--gray2);font-weight:400;font-size:11px;margin-top:2px}
-  #sliders{margin:8px;padding:10px 12px;background:var(--panel);border-radius:12px}
-  .sl{display:flex;align-items:center;gap:10px;margin:6px 0}
-  .sl label{flex:0 0 70px;font-size:13px;color:var(--gray2)}
+       padding:env(safe-area-inset-top) 14px env(safe-area-inset-bottom);}
+  .glass{backdrop-filter:blur(20px) saturate(160%);-webkit-backdrop-filter:blur(20px) saturate(160%);
+         background:var(--glass);border:1px solid var(--gline);box-shadow:inset 0 1px 0 var(--ghi);}
+  #top{display:flex;align-items:center;justify-content:space-between;margin:14px 0 16px}
+  #brand{display:flex;align-items:center;gap:9px;padding:9px 16px 9px 13px;border-radius:22px}
+  #brand b{font-size:18px;font-weight:500;letter-spacing:.3px}
+  #dot{width:10px;height:10px;border-radius:50%;background:var(--blue);display:inline-block}
+  #gear{width:42px;height:42px;border-radius:50%;color:#fff;display:flex;align-items:center;justify-content:center;padding:0}
+  #banner{border-radius:22px;padding:13px;text-align:center;margin-bottom:18px;transition:border-color .3s,background .3s}
+  #banner b{font-size:17px;font-weight:500;display:block;color:var(--g1)}
+  #banner span{font-size:13px;color:var(--g2)}
+  #barwrap{border-radius:30px;padding:16px;margin:0 auto 16px;width:212px;
+           background:rgba(255,255,255,.045);backdrop-filter:blur(22px) saturate(140%);
+           -webkit-backdrop-filter:blur(22px) saturate(140%);
+           border:1px solid rgba(255,255,255,.1);box-shadow:inset 0 1px 0 rgba(255,255,255,.16)}
+  #bar{display:flex;flex-direction:column-reverse;gap:6px;height:46vh;min-height:240px;max-height:330px}
+  .seg{flex:1;border-radius:9px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08);
+       transition:background .12s,border-color .12s}
+  #read{text-align:center}
+  #db{font-size:46px;font-weight:500;line-height:1;color:var(--g1)}
+  #freq{font-size:18px;font-weight:500;margin-top:8px;color:var(--g2)}
+  #trend{font-size:14px;font-weight:500;margin-top:6px;color:var(--g2)}
+  #scrim{position:fixed;inset:0;z-index:4;background:rgba(0,0,0,.4);opacity:0;pointer-events:none;transition:opacity .3s}
+  #scrim.open{opacity:1;pointer-events:auto}
+  #drawer{position:fixed;left:0;right:0;bottom:0;z-index:5;
+          padding:18px 16px calc(26px + env(safe-area-inset-bottom));
+          border-radius:30px 30px 0 0;background:rgba(24,24,28,.62);
+          backdrop-filter:blur(34px) saturate(170%);-webkit-backdrop-filter:blur(34px) saturate(170%);
+          border-top:1px solid rgba(255,255,255,.16);box-shadow:inset 0 1px 0 rgba(255,255,255,.18);
+          transform:translateY(108%);transition:transform .32s cubic-bezier(.32,.72,0,1)}
+  #drawer.open{transform:translateY(0)}
+  #grab{width:38px;height:5px;border-radius:3px;background:rgba(255,255,255,.28);margin:0 auto 14px}
+  #dhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+  #dhead b{font-size:16px;font-weight:500}
+  #close{display:flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:50%;
+         background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.16);color:#fff;padding:0}
+  #btns{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:14px}
+  #btns button{padding:12px 6px;border-radius:14px;border:1px solid rgba(255,255,255,.14);
+        background:rgba(255,255,255,.07);color:#fff;font-size:14px;font-weight:500;
+        box-shadow:inset 0 1px 0 rgba(255,255,255,.16)}
+  #btns button:active{background:rgba(255,255,255,.14)}
+  #btns button.wide{grid-column:span 2}
+  #btns small{display:block;color:var(--g2);font-weight:400;font-size:11px;margin-top:2px}
+  .sl{display:flex;align-items:center;gap:10px;margin:9px 0}
+  .sl label{flex:0 0 64px;font-size:13px;color:var(--g2)}
   .sl input{flex:1}
-  .sl .v{flex:0 0 50px;text-align:right;font-weight:700;font-size:14px}
-  #info{margin:8px;color:var(--gray2);font-size:12px;text-align:center}
+  .sl .v{flex:0 0 46px;text-align:right;font-weight:500;font-size:14px}
 </style></head><body>
-<div id="banner"><b id="bt">●</b><span id="bd">verbinden…</span></div>
-<div id="bars"><div class="bar" id="b0"></div><div class="bar" id="b1"></div><div class="bar" id="b2"></div></div>
-<div id="btns">
-  <button onclick="cmd('mode')">Rijmodus<small id="m">—</small></button>
-  <button onclick="cmd('band')">Band<small id="bn">—</small></button>
-  <button onclick="cmd('gain')">Gain<small id="g">—</small></button>
-  <button onclick="cmd('mute')">Geluid<small id="mu">—</small></button>
-  <button onclick="cmd('reset')">Reset ruisvloer<small>opnieuw inregelen</small></button>
-  <button onclick="cmd('blacklist')">Wis negeerlijst<small id="bl">—</small></button>
+<div id="top">
+  <div id="brand" class="glass"><span id="dot"></span><b>PrioSense</b></div>
+  <button id="gear" class="glass" aria-label="Instellingen" onclick="openDrawer()">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+  </button>
 </div>
-<div id="sliders">
-  <div class="sl"><label>Geel ≥</label>
-    <input id="ssoft" type="range" min="5" max="60" step="1"
+<div id="banner"><b id="bt">●</b><span id="bd">verbinden…</span></div>
+<div id="barwrap"><div id="bar"></div></div>
+<div id="read">
+  <div id="db">—</div>
+  <div id="freq">—</div>
+  <div id="trend">geen contact</div>
+</div>
+<div id="scrim" onclick="closeDrawer()"></div>
+<div id="drawer">
+  <div id="grab"></div>
+  <div id="dhead"><b>Instellingen</b>
+    <button id="close" aria-label="Sluiten" onclick="closeDrawer()">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+    </button>
+  </div>
+  <div id="btns">
+    <button onclick="cmd('mode')">Rijmodus<small id="m">—</small></button>
+    <button onclick="cmd('band')">Band<small id="bn">—</small></button>
+    <button onclick="cmd('gain')">Gain<small id="g">—</small></button>
+    <button onclick="cmd('mute')">Geluid<small id="mu">—</small></button>
+    <button class="wide" onclick="cmd('reset')">Reset ruisvloer<small>opnieuw inregelen</small></button>
+  </div>
+  <div class="sl"><label>Groen ≥</label>
+    <input id="sgroen" type="range" min="5" max="50" step="1" style="accent-color:var(--green)"
+      oninput="document.getElementById('vgroen').textContent=this.value+' dB'"
+      onchange="cmdVal('groen',this.value)">
+    <span class="v" id="vgroen">— dB</span></div>
+  <div class="sl"><label>Oranje ≥</label>
+    <input id="ssoft" type="range" min="10" max="60" step="1" style="accent-color:var(--orange)"
       oninput="document.getElementById('vsoft').textContent=this.value+' dB'"
       onchange="cmdVal('soft',this.value)">
     <span class="v" id="vsoft">— dB</span></div>
   <div class="sl"><label>Rood ≥</label>
-    <input id="shard" type="range" min="10" max="70" step="1"
+    <input id="shard" type="range" min="15" max="70" step="1" style="accent-color:var(--red)"
       oninput="document.getElementById('vhard').textContent=this.value+' dB'"
       onchange="cmdVal('hard',this.value)">
     <span class="v" id="vhard">— dB</span></div>
   <div class="sl"><label>Gain</label>
-    <input id="sgain" type="range" min="0" max="49" step="1"
+    <input id="sgain" type="range" min="0" max="49" step="1" style="accent-color:var(--blue)"
       oninput="document.getElementById('vgain').textContent=this.value+' dB'"
       onchange="cmdVal('gainval',this.value)">
     <span class="v" id="vgain">— dB</span></div>
 </div>
-<div id="info">—</div>
 <script>
-function colorFor(l,soft,hard){return l>=hard?'var(--red)':l>=soft?'var(--yellow)':'var(--green)';}
-function renderBar(i,s){
-  var el=document.getElementById('b'+i), a=s.active[i];
-  if(!a){
-    el.innerHTML='<div class="track"><div class="fill" style="height:0%;background:var(--panel2)"></div></div>'+
-      '<div class="lbl"><div class="f" style="color:var(--gray2)">—</div>'+
-      '<div class="d" style="color:var(--gray2)">geen contact</div>'+
-      '<div class="t" style="color:var(--gray2)"> </div></div>';
-    return;
+var GREEN=20, SOFT=35, HARD=45;
+function openDrawer(){ensureAudio();document.getElementById('drawer').classList.add('open');document.getElementById('scrim').classList.add('open');}
+function closeDrawer(){document.getElementById('drawer').classList.remove('open');document.getElementById('scrim').classList.remove('open');}
+function hexFor(db){return db>=HARD?'#ff453a':db>=SOFT?'#ff9f0a':'#30d158';}
+function rgba(hex,a){var n=parseInt(hex.slice(1),16);return 'rgba('+(n>>16)+','+((n>>8)&255)+','+(n&255)+','+a+')';}
+var bar=document.getElementById('bar'), segs=[];
+for(var i=0;i<10;i++){var s=document.createElement('div');s.className='seg';bar.appendChild(s);segs.push(s);}
+function renderBar(lvl){
+  var top=Math.max(GREEN+5, HARD+7);
+  var lit=lvl<GREEN?0:Math.max(0,Math.min(10,Math.round((lvl-GREEN)/(top-GREEN)*10)));
+  for(var i=0;i<10;i++){
+    if(i<lit){var h=hexFor(GREEN+(i+0.5)/10*(top-GREEN));segs[i].style.background=rgba(h,.85);segs[i].style.borderColor=rgba(h,.5);}
+    else{segs[i].style.background='rgba(255,255,255,.06)';segs[i].style.borderColor='rgba(255,255,255,.08)';}
   }
-  var f=a[0], lvl=a[1], tr=a[2];
-  var full=Math.max(1,s.hard+6), pct=Math.max(0,Math.min(1,lvl/full))*100;
-  var col=colorFor(lvl,s.soft,s.hard);
-  var arrow=tr>0?'▲ nadert':tr<0?'▼ gaat weg':'► stabiel';
-  var ac=tr>0?'var(--green)':tr<0?'var(--orange)':'var(--gray2)';
-  el.innerHTML='<div class="track"><div class="fill" style="height:'+pct+'%;background:'+col+'"></div></div>'+
-    '<div class="lbl"><div class="f" style="color:'+col+'">'+f.toFixed(3)+' MHz</div>'+
-    '<div class="d">+'+Math.round(lvl)+' dB</div>'+
-    '<div class="t" style="color:'+ac+'">'+arrow+'</div></div>';
+}
+function setBanner(hex,title,sub){
+  var ban=document.getElementById('banner');
+  ban.style.background=rgba(hex,.15);ban.style.borderColor=rgba(hex,.55);
+  var bt=document.getElementById('bt'),bd=document.getElementById('bd');
+  bt.textContent=title;bt.style.color=hex;bd.textContent=sub;bd.style.color=rgba(hex,.85);
+}
+function setBannerNeutral(title,sub){
+  var ban=document.getElementById('banner');
+  ban.style.background='var(--glass)';ban.style.borderColor='var(--gline)';
+  var bt=document.getElementById('bt'),bd=document.getElementById('bd');
+  bt.textContent=title;bt.style.color='var(--g1)';bd.textContent=sub;bd.style.color='var(--g2)';
 }
 var sliderTouchedAt=0;
+function setS(id,vid,val){document.getElementById(id).value=Math.round(val);document.getElementById(vid).textContent=Math.round(val)+' dB';}
 function syncSliders(s){
-  if(Date.now()-sliderTouchedAt<1500) return;     // niet overschrijven tijdens slepen
-  var ss=document.getElementById('ssoft'), sh=document.getElementById('shard'),
-      sg=document.getElementById('sgain');
-  ss.value=Math.round(s.soft); document.getElementById('vsoft').textContent=Math.round(s.soft)+' dB';
-  sh.value=Math.round(s.hard); document.getElementById('vhard').textContent=Math.round(s.hard)+' dB';
-  sg.value=Math.round(s.gain_set); document.getElementById('vgain').textContent=Math.round(s.gain_set)+' dB';
+  if(Date.now()-sliderTouchedAt<1500) return;
+  setS('sgroen','vgroen',s.groen);setS('ssoft','vsoft',s.soft);
+  setS('shard','vhard',s.hard);setS('sgain','vgain',s.gain_set);
 }
-['ssoft','shard','sgain'].forEach(function(id){
+['sgroen','ssoft','shard','sgain'].forEach(function(id){
   document.getElementById(id).addEventListener('input',function(){sliderTouchedAt=Date.now();});
 });
 function render(s){
-  var bt=document.getElementById('bt'), bd=document.getElementById('bd'),
-      ban=document.getElementById('banner');
-  var bg='var(--panel)',bc='var(--sep)',tc='var(--gray2)';
-  if(s.connected===false){bg='#2d0b0b';bc='var(--red)';tc='var(--red)';
-     bt.textContent='🔌 SDR LOSGEKOPPELD';bd.textContent='steek de dongle terug — verbindt automatisch';}
-  else if(s.overload){bg='#2d0b0b';bc='var(--red)';tc='var(--red)';
-     bt.textContent='🚨 ZEER STERK SIGNAAL DICHTBIJ';bd.textContent='zender vlakbij — overstuur';}
-  else if(s.alarm==2){bg='#2d0b0b';bc='var(--red)';tc='var(--red)';
-     bt.textContent='🚨 ACTIVITEIT';bd.textContent=s.alarm_freq.toFixed(3)+' MHz   +'+Math.round(s.alarm_db)+' dB';}
-  else if(s.alarm==1){bg='#2a1f00';bc='var(--orange)';tc='var(--orange)';
-     bt.textContent='◆ MOGELIJKE ACTIVITEIT';bd.textContent=s.alarm_freq.toFixed(3)+' MHz   +'+Math.round(s.alarm_db)+' dB';}
-  else{bt.textContent='● GEEN ACTIVITEIT';bd.textContent=s.status;}
-  ban.style.background=bg;ban.style.borderColor=bc;bt.style.color=tc;
-  for(var i=0;i<3;i++)renderBar(i,s);
+  GREEN=s.groen;SOFT=s.soft;HARD=s.hard;
+  var prim=s.active.length?s.active[0]:null;
+  var lvl=prim?prim[1]:0;
+  if(s.overload) lvl=Math.max(lvl,s.hard+10);
+  if(s.connected===false) setBanner('#ff453a','SDR losgekoppeld','steek de dongle terug — verbindt automatisch');
+  else if(s.overload) setBanner('#ff453a','Zeer sterk signaal dichtbij','zender vlakbij — overstuur');
+  else if(s.alarm==2) setBanner('#ff453a','Activiteit',s.alarm_freq.toFixed(3)+' MHz   +'+Math.round(s.alarm_db)+' dB');
+  else if(s.alarm==1) setBanner('#ff9f0a','Mogelijke activiteit',s.alarm_freq.toFixed(3)+' MHz   +'+Math.round(s.alarm_db)+' dB');
+  else setBannerNeutral('Geen activiteit',s.status);
+  renderBar(lvl);
+  var db=document.getElementById('db'),freq=document.getElementById('freq'),trend=document.getElementById('trend');
+  if(prim && lvl>=GREEN){
+    var h=hexFor(lvl);
+    db.textContent='+'+Math.round(lvl)+' dB';db.style.color=h;
+    freq.textContent=prim[0].toFixed(3)+' MHz';freq.style.color=rgba(h,.8);
+    var tr=prim[2];
+    trend.textContent=tr>0?'▲ nadert':tr<0?'▼ gaat weg':'► stabiel';
+    trend.style.color=tr>0?'#30d158':tr<0?'#ff9f0a':'var(--g2)';
+  }else{
+    db.textContent='—';db.style.color='var(--g1)';
+    freq.textContent='—';freq.style.color='var(--g2)';
+    trend.textContent='geen contact';trend.style.color='var(--g2)';
+  }
   syncSliders(s);
   document.getElementById('m').textContent=s.mode;
   document.getElementById('bn').textContent=s.band.split(' ').slice(0,2).join(' ');
   document.getElementById('g').textContent=s.gainmode;
   document.getElementById('mu').textContent=s.muted?'gedempt':'aan';
-  document.getElementById('bl').textContent=s.blacklist+' genegeerd';
-  document.getElementById('info').textContent=
-    'actief: '+s.total+'   ·   gain '+Math.round(s.gain)+' dB   ·   drempel '+
-    Math.round(s.soft)+'/'+Math.round(s.hard)+' dB'+(s.haze_db>0?'   ·   ⚠ vloer +'+s.haze_db+' dB':'');
 }
-// ── Geiger-piepjes: sneller bij sterker signaal ─────────────────────────
 var AC=null, nextBeep=0, lastLvl=0, lastSoft=18, lastHard=30, muted=false;
 function ensureAudio(){if(!AC){try{AC=new (window.AudioContext||window.webkitAudioContext)();}catch(e){}}}
 document.body.addEventListener('click',ensureAudio,{once:false});
 function beep(lvl,hard){
   if(!AC) return;
   var t=AC.currentTime, o=AC.createOscillator(), g=AC.createGain();
-  var pitch=600+Math.min(1,lvl/Math.max(1,hard))*900;       // 600→1500 Hz
+  var pitch=600+Math.min(1,lvl/Math.max(1,hard))*900;
   o.frequency.value=pitch; o.type='square';
   g.gain.setValueAtTime(0.0001,t);
   g.gain.exponentialRampToValueAtTime(0.25,t+0.005);
@@ -334,16 +390,14 @@ function beep(lvl,hard){
 function geigerTick(){
   if(!muted && AC && lastLvl>=lastSoft){
     var now=AC.currentTime*1000;
-    // interval: 800 ms bij soft → 70 ms bij hard (en sneller daarboven)
     var span=Math.max(4,lastHard-lastSoft);
-    var x=Math.max(0,(lastLvl-lastSoft)/span);              // 0..1+
+    var x=Math.max(0,(lastLvl-lastSoft)/span);
     var interval=Math.max(50, 800 - x*730);
     if(now>=nextBeep){beep(lastLvl,lastHard); nextBeep=now+interval;}
   }
   requestAnimationFrame(geigerTick);
 }
 requestAnimationFrame(geigerTick);
-
 async function poll(){try{var r=await fetch('/state');var s=await r.json();
   lastSoft=s.soft; lastHard=s.hard; muted=s.muted;
   lastLvl=s.active.length?s.active[0][1]:0;

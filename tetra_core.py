@@ -72,10 +72,12 @@ OCC_PEAK_FRAC     = 0.40       # één bin > 40% van kanaalenergie = smalle piek
 #   Stad    = druk RF → minder gevoelig (minder vals alarm)
 #   Snelweg = weinig signalen → gevoeliger (vangt zwakke/korte bursts)
 #   Custom  = je eigen schuif-instelling
+# "groen" is puur weergave: vanaf deze sterkte begint de balk op te lopen
+# (de detectie zelf gebruikt alleen soft=oranje en hard=rood).
 RIJMODI = [
-    {"name": "Stad",    "soft": 30.0, "hard": 45.0},
-    {"name": "Snelweg", "soft": 25.0, "hard": 35.0},
-    {"name": "Custom",  "soft": SOFT_THRESHOLD_DB, "hard": HARD_THRESHOLD_DB},
+    {"name": "Stad",    "groen": 20.0, "soft": 35.0, "hard": 45.0},
+    {"name": "Snelweg", "groen": 10.0, "soft": 25.0, "hard": 38.0},
+    {"name": "Custom",  "groen": 15.0, "soft": SOFT_THRESHOLD_DB, "hard": HARD_THRESHOLD_DB},
 ]
 CUSTOM_IDX  = 2
 MODE_COLORS = {"Stad": "orange", "Snelweg": "green", "Custom": "blue"}
