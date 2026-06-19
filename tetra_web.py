@@ -53,7 +53,7 @@ def _make_icon(size=512):
     """Donkere PrioSense-tegel met één rechtopstaande balk (groen→oranje→rood).
     iOS maakt de hoeken zelf rond, dus we vullen het hele vierkant."""
     img = np.empty((size, size, 3), dtype=np.uint8)
-    img[:] = (16, 16, 20)                                   # achtergrond #101014
+    img[:] = (39, 40, 50)                                   # achtergrond #272832
     bw   = int(size * 0.30)
     x0   = (size - bw) // 2
     top  = int(size * 0.16)
@@ -68,8 +68,8 @@ def _make_icon(size=512):
 ICON_PNG = _make_icon()
 MANIFEST = json.dumps({
     "name": "PrioSense", "short_name": "PrioSense",
-    "display": "standalone", "background_color": "#101014",
-    "theme_color": "#101014", "start_url": "/",
+    "display": "standalone", "background_color": "#272832",
+    "theme_color": "#272832", "start_url": "/",
     "icons": [{"src": "/icon.png", "sizes": "192x192", "type": "image/png"},
               {"src": "/icon.png", "sizes": "512x512", "type": "image/png"}],
 })
@@ -197,14 +197,14 @@ PAGE = r"""<!doctype html><html lang="nl"><head>
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="PrioSense">
-<meta name="theme-color" content="#101014">
+<meta name="theme-color" content="#272832">
 <link rel="apple-touch-icon" href="/icon.png">
 <link rel="icon" href="/icon.png">
 <link rel="manifest" href="/manifest.json">
 <style>
-  :root{--bg:#101014;--green:#30d158;--orange:#ff9f0a;--red:#ff453a;--blue:#0a84ff;
-        --g1:rgba(235,235,245,.6);--g2:rgba(235,235,245,.45);
-        --glass:rgba(255,255,255,.07);--gline:rgba(255,255,255,.14);--ghi:rgba(255,255,255,.2);}
+  :root{--bg:#272832;--green:#30d158;--orange:#ff9f0a;--red:#ff453a;--blue:#0a84ff;
+        --g1:rgba(235,235,245,.85);--g2:rgba(235,235,245,.65);
+        --glass:rgba(255,255,255,.12);--gline:rgba(255,255,255,.22);--ghi:rgba(255,255,255,.3);}
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   body{margin:0;background:var(--bg);color:#fff;
        font-family:-apple-system,system-ui,Roboto,sans-serif;
@@ -220,11 +220,11 @@ PAGE = r"""<!doctype html><html lang="nl"><head>
   #banner b{font-size:17px;font-weight:500;display:block;color:var(--g1)}
   #banner span{font-size:13px;color:var(--g2)}
   #barwrap{border-radius:30px;padding:16px;margin:0 auto 16px;width:212px;
-           background:rgba(255,255,255,.045);backdrop-filter:blur(22px) saturate(140%);
+           background:rgba(255,255,255,.09);backdrop-filter:blur(22px) saturate(140%);
            -webkit-backdrop-filter:blur(22px) saturate(140%);
-           border:1px solid rgba(255,255,255,.1);box-shadow:inset 0 1px 0 rgba(255,255,255,.16)}
+           border:1px solid rgba(255,255,255,.18);box-shadow:inset 0 1px 0 rgba(255,255,255,.26)}
   #bar{display:flex;flex-direction:column-reverse;gap:6px;height:46vh;min-height:240px;max-height:330px}
-  .seg{flex:1;border-radius:9px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.08);
+  .seg{flex:1;border-radius:9px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.14);
        transition:background .12s,border-color .12s}
   #read{text-align:center}
   #db{font-size:46px;font-weight:500;line-height:1;color:var(--g1)}
@@ -234,21 +234,21 @@ PAGE = r"""<!doctype html><html lang="nl"><head>
   #scrim.open{opacity:1;pointer-events:auto}
   #drawer{position:fixed;left:0;right:0;bottom:0;z-index:5;
           padding:18px 16px calc(26px + env(safe-area-inset-bottom));
-          border-radius:30px 30px 0 0;background:rgba(24,24,28,.62);
+          border-radius:30px 30px 0 0;background:rgba(54,55,66,.74);
           backdrop-filter:blur(34px) saturate(170%);-webkit-backdrop-filter:blur(34px) saturate(170%);
-          border-top:1px solid rgba(255,255,255,.16);box-shadow:inset 0 1px 0 rgba(255,255,255,.18);
+          border-top:1px solid rgba(255,255,255,.24);box-shadow:inset 0 1px 0 rgba(255,255,255,.28);
           transform:translateY(108%);transition:transform .32s cubic-bezier(.32,.72,0,1)}
   #drawer.open{transform:translateY(0)}
-  #grab{width:38px;height:5px;border-radius:3px;background:rgba(255,255,255,.28);margin:0 auto 14px}
+  #grab{width:38px;height:5px;border-radius:3px;background:rgba(255,255,255,.4);margin:0 auto 14px}
   #dhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
   #dhead b{font-size:16px;font-weight:500}
   #close{display:flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:50%;
-         background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.16);color:#fff;padding:0}
+         background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.24);color:#fff;padding:0}
   #btns{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:14px}
-  #btns button{padding:12px 6px;border-radius:14px;border:1px solid rgba(255,255,255,.14);
-        background:rgba(255,255,255,.07);color:#fff;font-size:14px;font-weight:500;
-        box-shadow:inset 0 1px 0 rgba(255,255,255,.16)}
-  #btns button:active{background:rgba(255,255,255,.14)}
+  #btns button{padding:12px 6px;border-radius:14px;border:1px solid rgba(255,255,255,.2);
+        background:rgba(255,255,255,.12);color:#fff;font-size:14px;font-weight:500;
+        box-shadow:inset 0 1px 0 rgba(255,255,255,.22)}
+  #btns button:active{background:rgba(255,255,255,.2)}
   #btns button.wide{grid-column:span 2}
   #btns small{display:block;color:var(--g2);font-weight:400;font-size:11px;margin-top:2px}
   .sl{display:flex;align-items:center;gap:10px;margin:9px 0}
@@ -258,7 +258,7 @@ PAGE = r"""<!doctype html><html lang="nl"><head>
 </style></head><body>
 <div id="top">
   <div id="brand" class="glass"><span id="dot"></span><b>PrioSense</b></div>
-  <button id="gear" class="glass" aria-label="Instellingen" onclick="openDrawer()">
+  <button id="gear" class="glass" aria-label="Instellingen" onclick="toggleDrawer()">
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
   </button>
 </div>
@@ -309,6 +309,7 @@ PAGE = r"""<!doctype html><html lang="nl"><head>
 var GREEN=20, SOFT=35, HARD=45;
 function openDrawer(){ensureAudio();document.getElementById('drawer').classList.add('open');document.getElementById('scrim').classList.add('open');}
 function closeDrawer(){document.getElementById('drawer').classList.remove('open');document.getElementById('scrim').classList.remove('open');}
+function toggleDrawer(){if(document.getElementById('drawer').classList.contains('open'))closeDrawer();else openDrawer();}
 function hexFor(db){return db>=HARD?'#ff453a':db>=SOFT?'#ff9f0a':'#30d158';}
 function rgba(hex,a){var n=parseInt(hex.slice(1),16);return 'rgba('+(n>>16)+','+((n>>8)&255)+','+(n&255)+','+a+')';}
 var bar=document.getElementById('bar'), segs=[];
@@ -318,7 +319,7 @@ function renderBar(lvl){
   var lit=lvl<GREEN?0:Math.max(0,Math.min(10,Math.round((lvl-GREEN)/(top-GREEN)*10)));
   for(var i=0;i<10;i++){
     if(i<lit){var h=hexFor(GREEN+(i+0.5)/10*(top-GREEN));segs[i].style.background=rgba(h,.85);segs[i].style.borderColor=rgba(h,.5);}
-    else{segs[i].style.background='rgba(255,255,255,.06)';segs[i].style.borderColor='rgba(255,255,255,.08)';}
+    else{segs[i].style.background='rgba(255,255,255,.1)';segs[i].style.borderColor='rgba(255,255,255,.14)';}
   }
 }
 function setBanner(hex,title,sub){
